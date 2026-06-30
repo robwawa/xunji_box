@@ -1,0 +1,39 @@
+# ============================================================
+# 乐普 SLAM 3.0 底盘配置
+# 驱动: chassis_interface::LepuDriver
+# 协议: AA 54 帧, USB转RS232串口
+# ============================================================
+
+# --- 桥接节点参数 ---
+driver_plugin: "chassis_interface::LepuDriver"
+odom_topic: "odom"
+cmd_vel_topic: "cmd_vel"
+odom_frame: "odom"
+base_frame: "base_link"
+odom_queue_size: 50
+cmd_vel_queue_size: 1
+max_linear_speed: 0.2       # m/s 安全限幅
+max_angular_speed: 0.6      # rad/s 安全限幅
+cmd_vel_timeout: 0.2        # s, 超时自动停止
+publish_rate: 50.0          # Hz, odom发布频率
+diag_rate: 1.0              # Hz, 诊断发布频率
+
+# --- 里程计协方差 ---
+cov_pose_xx: 0.05
+cov_pose_yy: 0.05
+cov_pose_yawyaw: 0.1
+cov_twist_xx: 0.05
+cov_twist_yawyaw: 0.05
+
+# --- 乐普驱动专属参数 ---
+port: "/dev/ttyACM0"
+baudrate: 115200
+enable_pose_report: true
+wheel_separation: 0.242     # m
+wheel_radius: 0.0705        # m
+encoder_ticks_per_rev: 16384
+use_encoder_odom: true
+odom_linear_scale: 1.0
+odom_angular_scale: 1.0
+encoder_dt_max: 0.5         # s, 编码器最大有效间隔
+encoder_dt_fallback: 0.05   # s, 编码器兜底间隔

@@ -1,0 +1,43 @@
+# ============================================================
+# 通用底盘配置模板
+# 驱动: chassis_interface::TemplateDriver
+# 新底盘接入时，复制并修改此文件
+# ============================================================
+
+# --- 桥接节点公共参数 ---
+driver_plugin: "chassis_interface::TemplateDriver"
+
+# 话题名 (可自定义，适配不同导航栈的命名规范)
+odom_topic: "odom"
+cmd_vel_topic: "cmd_vel"
+
+# 坐标系
+odom_frame: "odom"
+base_frame: "base_link"
+
+# 队列大小
+odom_queue_size: 50
+cmd_vel_queue_size: 1
+
+# 安全限幅
+max_linear_speed: 0.3       # m/s
+max_angular_speed: 0.8      # rad/s
+cmd_vel_timeout: 0.2        # s, 超时自动停止
+publish_rate: 50.0          # Hz, odom发布频率
+diag_rate: 1.0              # Hz, 诊断发布频率
+
+# --- 里程计协方差 (影响 sensor fusion 权重，根据底盘编码器精度标定) ---
+cov_pose_xx: 0.05
+cov_pose_yy: 0.05
+cov_pose_yawyaw: 0.1
+cov_twist_xx: 0.05
+cov_twist_yawyaw: 0.05
+
+# --- 模板驱动专属参数 (替换为你底盘的实际参数) ---
+# port: "/dev/ttyUSB0"
+# baudrate: 115200
+# wheel_separation: 0.30
+# wheel_radius: 0.10
+# encoder_ticks_per_rev: 4096
+# odom_linear_scale: 1.0
+# odom_angular_scale: 1.0

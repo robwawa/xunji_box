@@ -1,0 +1,29 @@
+<launch>
+  <!-- ============================================================
+       乐普底盘驱动启动文件
+       加载 chassis_interface::LepuDriver 插件
+       ============================================================ -->
+
+  <!-- 串口参数 -->
+  <arg name="port" default="/dev/ttyACM0" doc="Serial port"/>
+  <arg name="baudrate" default="115200" doc="Serial baudrate"/>
+
+  <!-- 话题名 (可覆盖 YAML，适配不同导航栈命名规范) -->
+  <arg name="odom_topic" default="odom" doc="Odometry topic name"/>
+  <arg name="cmd_vel_topic" default="cmd_vel" doc="Command velocity topic name"/>
+
+  <!-- 加载 YAML 参数 -->
+  <rosparam file="$(find chassis_interface)/config/lepu_chassis.yaml" command="load" ns="chassis_bridge_node"/>
+
+  <!-- 命令行覆盖 -->
+  <param name="chassis_bridge_node/port" value="$(arg port)"/>
+  <param name="chassis_bridge_node/baudrate" value="$(arg baudrate)"/>
+  <param name="chassis_bridge_node/odom_topic" value="$(arg odom_topic)"/>
+  <param name="chassis_bridge_node/cmd_vel_topic" value="$(arg cmd_vel_topic)"/>
+
+  <!-- 桥接节点 -->
+  <node name="chassis_bridge_node" pkg="chassis_interface"
+        type="chassis_bridge_node" output="screen" respawn="true">
+  </node>
+
+</launch>

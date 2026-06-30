@@ -1,0 +1,28 @@
+<launch>
+  <!-- ============================================================
+       通用底盘驱动启动文件模板
+       ============================================================ -->
+
+  <!-- 驱动插件 (可命令行切换) -->
+  <arg name="driver_plugin" default="chassis_interface::TemplateDriver"
+       doc="pluginlib class name of the driver"/>
+
+  <!-- 话题名 -->
+  <arg name="odom_topic" default="odom" doc="Odometry topic name"/>
+  <arg name="cmd_vel_topic" default="cmd_vel" doc="Command velocity topic name"/>
+
+  <!-- 加载 YAML -->
+  <rosparam file="$(find chassis_interface)/config/template_chassis.yaml"
+            command="load" ns="chassis_bridge_node"/>
+
+  <!-- 命令行覆盖 -->
+  <param name="chassis_bridge_node/driver_plugin" value="$(arg driver_plugin)"/>
+  <param name="chassis_bridge_node/odom_topic" value="$(arg odom_topic)"/>
+  <param name="chassis_bridge_node/cmd_vel_topic" value="$(arg cmd_vel_topic)"/>
+
+  <!-- 桥接节点 -->
+  <node name="chassis_bridge_node" pkg="chassis_interface"
+        type="chassis_bridge_node" output="screen" respawn="true">
+  </node>
+
+</launch>

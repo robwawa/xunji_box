@@ -1,0 +1,10 @@
+<library path="lib/libchassis_interface">
+  <class type="chassis_interface::LepuDriver"
+         base_class_type="chassis_interface::ChassisDriver">
+    <description>Lepu SLAM 3.0 serial chassis driver (AA 54 frame protocol, USB-RS232)</description>
+  </class>
+  <class type="chassis_interface::TemplateDriver"
+         base_class_type="chassis_interface::ChassisDriver">
+    <description>Template driver for new chassis integration — copy and fill in the blanks</description>
+  </class>
+</library>

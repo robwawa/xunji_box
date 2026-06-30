@@ -1,0 +1,25 @@
+# Lepu chassis default parameters
+port: /dev/ttyACM0
+baudrate: 115200
+odom_frame: odom
+base_frame: base_link
+odom_topic: odom
+publish_tf: true
+heartbeat_interval_sec: 5.0
+enable_pose_report: true
+wheel_separation: 0.242
+wheel_radius: 0.0705
+encoder_ticks_per_rev: 16384
+use_encoder_odom: true
+odom_source: encoder
+odom_linear_scale: 1.0
+odom_angular_scale: 1.0
+pose_source_timeout_sec: 1.0
+encoder_stale_timeout_sec: 0.5
+derive_twist_from_pose: true
+enable_cmd_vel_control: true
+cmd_vel_topic: cmd_vel
+cmd_vel_timeout_sec: 0.2
+cmd_vel_publish_period_sec: 0.1
+max_linear_speed: 0.2
+max_angular_speed: 0.6
