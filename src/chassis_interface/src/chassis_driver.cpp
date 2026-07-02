@@ -22,7 +22,9 @@ std::string ChassisDriver::getDriverName() const
 {
   return "unknown";
 }
-
+// ============================================================
+// 计算运动积分，根据当前状态和增量运动计算积分运动
+// ============================================================
 void ChassisDriver::integrateMotion(double& x, double& y, double& yaw,
                                     double& v, double& w,
                                     double delta_center, double delta_yaw, double dt)
@@ -43,7 +45,9 @@ void ChassisDriver::integrateMotion(double& x, double& y, double& yaw,
   v = delta_center / dt;
   w = delta_yaw / dt;
 }
-
+// ============================================================
+// 角度归一化
+// ============================================================
 double ChassisDriver::normalizeAngle(double angle)
 {
   while (angle > M_PI)  angle -= 2.0 * M_PI;

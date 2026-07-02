@@ -76,8 +76,8 @@ install(DIRECTORY include/${PROJECT_NAME}/
   DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
 )
 
-install(FILES chassis_interface_plugin.xml
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+install(FILES plugins/chassis_interface_plugin.xml
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/plugins
 )
 
 install(DIRECTORY launch/

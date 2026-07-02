@@ -51,9 +51,9 @@ chassis_interface/
 │   ├── lepu_chassis.yaml
 │   └── template_chassis.yaml
 ├── launch/
-│   ├── lepu_chassis.launch
-│   └── template_chassis.launch
-├── chassis_interface_plugin.xml
+│   └── chassis_bridge.launch       # 通用启动文件
+├── plugins/
+│   └── chassis_interface_plugin.xml # 插件注册
 ├── CMakeLists.txt
 └── package.xml
 ```
@@ -73,17 +73,21 @@ source devel/setup.bash
 ## 快速使用
 
 ```bash
-# 乐普底盘 (默认 base_vel 速度积分里程计)
-roslaunch chassis_interface lepu_chassis.launch
+# 乐普底盘 (默认加载 config/lepu_chassis.yaml)
+roslaunch chassis_interface chassis_bridge.launch
 
-# 切换为 nav_pose 绝对位姿里程计
-roslaunch chassis_interface lepu_chassis.launch _odom_source:="nav_pose"
+# 切换模板驱动
+roslaunch chassis_interface chassis_bridge.launch chassis:=template
 
-# 指定串口
-roslaunch chassis_interface lepu_chassis.launch port:=/dev/ttyUSB0
+# 自定义底盘 (自动加载 config/my_robot_chassis.yaml)
+roslaunch chassis_interface chassis_bridge.launch chassis:=my_robot
 
-# 模板驱动 (测试插件机制)
-roslaunch chassis_interface template_chassis.launch
+# 直接指定配置文件路径
+roslaunch chassis_interface chassis_bridge.launch config_path:=/tmp/special.yaml
+
+# 覆盖参数
+roslaunch chassis_interface chassis_bridge.launch chassis:=lepu \
+    port:=/dev/ttyUSB0 odom_topic:=/my_odom
 ```
 
 ## ROS API
@@ -94,8 +98,10 @@ roslaunch chassis_interface template_chassis.launch
 |------|------|------|------|
 | `/odom` (可配) | `nav_msgs/Odometry` | 发布 | 里程计 (含协方差) |
 | `/cmd_vel` (可配) | `geometry_msgs/Twist` | 订阅 | 速度指令 (带安全限幅+超时停止) |
+| `/cmd_vel_feedback` | `geometry_msgs/Twist` | 发布 | 实际速度反馈 (MPC闭环控制) |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | 发布 | 驱动健康状态 |
-| TF | `odom → base_link` | 发布 | 坐标变换 |
+
+> **TF 说明**：chassis_bridge_node 不发布 TF，由外部节点（xrobot_driver_odom_fusion / robot_localization）基于 `/odom` 数据融合后发布。
 
 ### 服务
 
@@ -139,13 +145,16 @@ roslaunch chassis_interface template_chassis.launch
 
 | 名称 | 默认值 | 说明 |
 |------|--------|------|
-| `~port` | `/dev/ttyACM0` | 串口设备 |
+| `~port` | `/dev/lepu_chassis` | 串口设备 (udev 持久化命名) |
 | `~baudrate` | 115200 | 波特率 |
 | `~enable_pose_report` | true | 开启 nav_pose 自动上报 |
-| `~odom_source` | `"base_vel"` | 里程计来源: `base_vel`(速度积分) 或 `nav_pose`(绝对位姿) |
+| `~odom_source` | `"nav_pose"` | 里程计来源: `base_vel`(速度积分) 或 `nav_pose`(绝对位姿) |
+| `~nav_mode` | `"mapping"` | 导航模式: `mapping`(建图) `navi`(导航) `remap`(增量建图) |
 | `~odom_linear_scale` | 1.0 | 线速度标定系数 |
 | `~odom_angular_scale` | 1.0 | 角速度标定系数 |
 | `~dt_max` | 0.5 | 最大有效时间间隔 (s) |
+| `~vel_lpf_alpha` | 0.3 | 速度低通滤波系数 (0~1, 越小越平滑) |
+| `~max_vel_change` | 0.5 | 最大速度变化率 (m/s², 防止SLAM跳变) |
 
 ### 生命周期
 
@@ -167,8 +176,10 @@ LepuDriver 支持两种里程计来源，通过 `~odom_source` 参数切换：
 
 | 模式 | 协议 | 算法 | 特点 |
 |------|------|------|------|
-| `base_vel` (默认) | `base_vel[v,w]` (§9) | 速度×dt → 中点法积分 | 平滑连续，累积误差 |
-| `nav_pose` | `nav:pose[x,y,θ]` (§27/§37) | 相对 origin 旋转变换 | 绝对值，无累积误差 |
+| `base_vel` | `base_vel[v,w]` (§9) | 速度×dt → 中点法积分 | 平滑连续，累积误差 |
+| `nav_pose` (默认) | `nav:pose[x,y,θ]` / `nav:time_pose[x,y,θ,ts]` (§27/§37) | 相对 origin 旋转变换 + 位置差分 + 低通滤波 | 绝对值，无累积误差 |
+
+> **nav_pose 速度计算**：仅用带时间戳的 `nav:time_pose` 计算速度（避免同批次 `nav:pose` 导致的零速衰减），位移投影到车头方向确定正负号。
 
 选择逻辑：
 ```cpp
@@ -259,7 +270,7 @@ src/drivers/your_driver.cpp
 
 ```bash
 catkin_make
-roslaunch chassis_interface template_chassis.launch
+roslaunch chassis_interface chassis_bridge.launch chassis:=your_chassis
 ```
 
 ## 已支持的底盘

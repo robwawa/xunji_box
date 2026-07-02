@@ -28,6 +28,6 @@
   <exec_depend>std_srvs</exec_depend>
 
   <export>
-    <chassis_interface plugin="${prefix}/chassis_interface_plugin.xml" />
+    <chassis_interface plugin="${prefix}/plugins/chassis_interface_plugin.xml" />
   </export>
 </package>

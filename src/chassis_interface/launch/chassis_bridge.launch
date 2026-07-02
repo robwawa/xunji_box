@@ -1,0 +1,38 @@
+<launch>
+  <!-- ============================================================
+       通用底盘桥接启动文件
+       通过 chassis 参数切换驱动插件和配置文件:
+         roslaunch chassis_interface chassis_bridge.launch chassis:=lepu
+         roslaunch chassis_interface chassis_bridge.launch chassis:=template
+         roslaunch chassis_interface chassis_bridge.launch config_path:=/tmp/my.yaml
+       ============================================================ -->
+
+  <!-- ==== 底盘类型 (自动推导配置文件路径) ==== -->
+  <arg name="chassis"     default="lepu" doc="Chassis type: lepu | template | custom_name"/>
+  <arg name="config_path" default="$(find chassis_interface)/config/$(arg chassis)_chassis.yaml"
+                          doc="Custom YAML config path (overrides chassis-derived path)"/>
+
+  <!-- ==== 可覆盖参数 ==== -->
+  <arg name="driver_plugin"  default="" doc="Override driver_plugin (empty=use YAML value)"/>
+  <arg name="odom_topic"     default="odom"/>
+  <arg name="cmd_vel_topic"  default="cmd_vel"/>
+  <arg name="port"           default="/dev/lepu_chassis"/>
+  <arg name="baudrate"       default="115200"/>
+
+  <!-- ==== 加载 YAML 配置 ==== -->
+  <rosparam file="$(arg config_path)" command="load" ns="chassis_bridge_node"/>
+
+  <!-- ==== 命令行参数覆盖 YAML 值 ==== -->
+  <param name="chassis_bridge_node/odom_topic"   value="$(arg odom_topic)"/>
+  <param name="chassis_bridge_node/cmd_vel_topic" value="$(arg cmd_vel_topic)"/>
+  <param name="chassis_bridge_node/port"          value="$(arg port)"/>
+  <param name="chassis_bridge_node/baudrate"      value="$(arg baudrate)"/>
+  <param name="chassis_bridge_node/driver_plugin" value="$(arg driver_plugin)"
+         if="$(eval arg('driver_plugin') != '')"/>
+
+  <!-- ==== 桥接节点 ==== -->
+  <node name="chassis_bridge_node" pkg="chassis_interface"
+        type="chassis_bridge_node" output="screen" respawn="true">
+  </node>
+
+</launch>
