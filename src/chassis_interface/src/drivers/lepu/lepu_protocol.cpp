@@ -1,7 +1,5 @@
 #include <chassis_interface/drivers/lepu/lepu_protocol.h>
 #include <regex>
-#include <sstream>
-#include <algorithm>
 #include <cstring>
 #include <cerrno>
 
@@ -62,19 +60,35 @@ std::string FrameParser::tryParseOne()
 // ============================================================
 // 消息解析器
 // ============================================================
-bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw)
+bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw,
+                  double* timestamp)
 {
-  std::regex re(R"(nav:time_pose\[([-\d.]+),([-\d.]+),([-\d.]+))");
+  // nav:time_pose[x,y,radian,time] — 4参数，§37自动上报
+  static const std::regex re_time(
+      R"(nav:time_pose\[([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+))",
+      std::regex::optimize);
+  // nav:pose[x,y,radian] — 3参数，§27主动查询
+  static const std::regex re_pose(
+      R"(nav:pose\[([-\d.]+),([-\d.]+),([-\d.]+))",
+      std::regex::optimize);
+
   std::smatch m;
-  if (std::regex_search(msg, m, re))
+  if (std::regex_search(msg, m, re_time))
   {
-    x = std::stod(m[1]); y = std::stod(m[2]); yaw = std::stod(m[3]);
+    // m[1]=x, m[2]=y, m[3]=radian, m[4]=timestamp
+    x = std::stod(m[1]);
+    y = std::stod(m[2]);
+    yaw = std::stod(m[3]);
+    if (timestamp) *timestamp = std::stod(m[4]);
     return true;
   }
-  re = R"(nav:pose\[([-\d.]+),([-\d.]+),([-\d.]+))";
-  if (std::regex_search(msg, m, re))
+  if (std::regex_search(msg, m, re_pose))
   {
-    x = std::stod(m[1]); y = std::stod(m[2]); yaw = std::stod(m[3]);
+    // m[1]=x, m[2]=y, m[3]=radian
+    x = std::stod(m[1]);
+    y = std::stod(m[2]);
+    yaw = std::stod(m[3]);
+    // 3参数格式无时间戳，timestamp保持调用方传入值
     return true;
   }
   return false;
@@ -82,35 +96,16 @@ bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw)
 
 bool parseBaseVel(const std::string& msg, double& linear, double& angular)
 {
-  std::regex re(R"(base_vel\[([-\d.]+)\s+([-\d.]+))");
+  static const std::regex re(R"(base_vel\[([-\d.]+)\s+([-\d.]+))",
+                             std::regex::optimize);
   std::smatch m;
   if (!std::regex_search(msg, m, re)) return false;
   linear = std::stod(m[1]); angular = std::stod(m[2]);
+  // 打印解析结果
+  printf("parseBaseVel: linear=%.3f, angular=%.3f\n", linear, angular);
   return true;
 }
 
-static bool parseArrayField6_7(const std::string& msg, const std::string& tag,
-                                int32_t& left, int32_t& right)
-{
-  std::regex re(tag + R"(\{([^}]+))");
-  std::smatch m;
-  if (!std::regex_search(msg, m, re)) return false;
-
-  std::istringstream iss(m[1].str());
-  std::vector<double> values;
-  double val;
-  while (iss >> val) values.push_back(val);
-  if (values.size() < 7) return false;
-  left = static_cast<int32_t>(values[5]);
-  right = static_cast<int32_t>(values[6]);
-  return true;
-}
-
-bool parseWheelEncoders(const std::string& msg, int32_t& left, int32_t& right)
-{
-  if (parseArrayField6_7(msg, "core_data", left, right)) return true;
-  return parseArrayField6_7(msg, "wheel_status", left, right);
-}
 
 // ============================================================
 // PosixSerial
@@ -247,7 +242,16 @@ void LepuSerialLink::readLoop()
   {
     if (!serial_.isOpen())
     {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      // 自动重连
+      if (serial_.open(port_, baudrate_))
+      {
+        // 重连成功，清空解析器缓冲区
+        parser_ = FrameParser();
+      }
+      else
+      {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+      }
       continue;
     }
 

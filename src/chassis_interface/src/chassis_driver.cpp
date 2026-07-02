@@ -23,4 +23,32 @@ std::string ChassisDriver::getDriverName() const
   return "unknown";
 }
 
+void ChassisDriver::integrateMotion(double& x, double& y, double& yaw,
+                                    double& v, double& w,
+                                    double delta_center, double delta_yaw, double dt)
+{
+  if (std::abs(delta_center) < 1e-9 && std::abs(delta_yaw) < 1e-9)
+  {
+    v = 0.0;
+    w = 0.0;
+    return;
+  }
+
+  double mid_yaw = yaw + 0.5 * delta_yaw;
+  x   += delta_center * std::cos(mid_yaw);
+  y   += delta_center * std::sin(mid_yaw);
+  yaw  = normalizeAngle(yaw + delta_yaw);
+
+  dt = std::max(dt, 1e-6);
+  v = delta_center / dt;
+  w = delta_yaw / dt;
+}
+
+double ChassisDriver::normalizeAngle(double angle)
+{
+  while (angle > M_PI)  angle -= 2.0 * M_PI;
+  while (angle < -M_PI) angle += 2.0 * M_PI;
+  return angle;
+}
+
 }  // namespace chassis_interface

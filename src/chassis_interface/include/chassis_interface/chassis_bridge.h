@@ -3,7 +3,7 @@
 
 #include <chassis_interface/chassis_driver.h>
 #include <ros/ros.h>
-#include <tf/transform_broadcaster.h>
+#include <tf/transform_datatypes.h>
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Twist.h>
 #include <diagnostic_msgs/DiagnosticArray.h>
@@ -79,8 +79,8 @@ private:
 
   // 话题
   ros::Publisher odom_pub_;
+  ros::Publisher cmd_vel_feedback_pub_;
   ros::Subscriber cmd_vel_sub_;
-  tf::TransformBroadcaster tf_broadcaster_;
 
   // 服务
   ros::ServiceServer enable_srv_;

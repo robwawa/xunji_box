@@ -1,7 +1,8 @@
 # ============================================================
 # 乐普 SLAM 3.0 底盘配置
 # 驱动: chassis_interface::LepuDriver
-# 协议: AA 54 帧, USB转RS232串口
+# 协议: AA 54 帧, USB-RS232, 115200 8N1
+# 参考: slam_api.txt (官方串口协议文档)
 # ============================================================
 
 # --- 桥接节点参数 ---
@@ -26,14 +27,15 @@ cov_twist_xx: 0.05
 cov_twist_yawyaw: 0.05
 
 # --- 乐普驱动专属参数 ---
-port: "/dev/ttyACM0"
+port: "/dev/lepu_chassis"
 baudrate: 115200
-enable_pose_report: true
-wheel_separation: 0.242     # m
-wheel_radius: 0.0705        # m
-encoder_ticks_per_rev: 16384
-use_encoder_odom: true
-odom_linear_scale: 1.0
-odom_angular_scale: 1.0
-encoder_dt_max: 0.5         # s, 编码器最大有效间隔
-encoder_dt_fallback: 0.05   # s, 编码器兜底间隔
+enable_pose_report: true         # 开启 nav_pose 自动上报 (§37)
+odom_source: "nav_pose"          # 里程计来源: "base_vel"(§9) 或 "nav_pose"(§27)
+nav_mode: "mapping"             # 导航模式: "mapping"(建图) "navi"(导航) "remap"(增量建图)
+odom_linear_scale: 1.0           # 线速度标定系数
+odom_angular_scale: 1.0          # 角速度标定系数
+dt_max: 0.5                      # s, 最大有效时间间隔
+vel_lpf_alpha: 0.3               # 速度低通滤波系数 (0~1, 越小越平滑, 0.3=中等滤波)
+max_vel_change: 0.5              # m/s², 单周期最大速度变化量(变化率限幅)
+
+# 注: 官方协议 core_data(§4) wheel_status(§5) 均不含编码器

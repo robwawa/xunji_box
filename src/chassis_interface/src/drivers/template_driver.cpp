@@ -58,9 +58,7 @@ private:
   void sendVelocity(double linear, double angular);
   void sendStop();
 
-  // ---- 里程计 ----
-  void integrateMotion(double delta_center, double delta_yaw, double dt);
-  double normalizeAngle(double angle) const;
+  // 里程计算法 inherit from ChassisDriver::integrateMotion / normalizeAngle
 
   mutable boost::shared_mutex state_mutex_;
   double odom_x_ = 0.0, odom_y_ = 0.0, odom_yaw_ = 0.0;
@@ -234,31 +232,7 @@ void TemplateDriver::getDiagnostics(diagnostic_updater::DiagnosticStatusWrapper&
 // ============================================================
 // 里程计算法 (通用 — 可直接复用)
 // ============================================================
-void TemplateDriver::integrateMotion(double delta_center, double delta_yaw, double dt)
-{
-  if (std::abs(delta_center) < 1e-9 && std::abs(delta_yaw) < 1e-9)
-  {
-    linear_vel_ = 0.0;
-    angular_vel_ = 0.0;
-    return;
-  }
-
-  double mid_yaw = odom_yaw_ + 0.5 * delta_yaw;
-  odom_x_ += delta_center * std::cos(mid_yaw);
-  odom_y_ += delta_center * std::sin(mid_yaw);
-  odom_yaw_ = normalizeAngle(odom_yaw_ + delta_yaw);
-
-  dt = std::max(dt, 1e-6);
-  linear_vel_ = delta_center / dt;
-  angular_vel_ = delta_yaw / dt;
-}
-
-double TemplateDriver::normalizeAngle(double angle) const
-{
-  while (angle > M_PI)  angle -= 2.0 * M_PI;
-  while (angle < -M_PI) angle += 2.0 * M_PI;
-  return angle;
-}
+// integrateMotion/normalizeAngle 已在 ChassisDriver 基类中实现，直接调用
 
 // ============================================================
 // 硬件层 — 串口示例 (TODO: 替换为你的通信方式)

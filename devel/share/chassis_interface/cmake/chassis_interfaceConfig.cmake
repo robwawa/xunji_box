@@ -187,7 +187,7 @@ foreach(t ${chassis_interface_EXPORTED_TARGETS})
   endif()
 endforeach()
 
-set(depends "roscpp;pluginlib;nav_msgs;geometry_msgs;tf;diagnostic_updater;std_srvs")
+set(depends "roscpp;pluginlib;nav_msgs;geometry_msgs;diagnostic_updater;std_srvs")
 foreach(depend ${depends})
   string(REPLACE " " ";" depend_list ${depend})
   # the package name of the dependency must be kept in a unique variable so that it is not overwritten in recursive calls

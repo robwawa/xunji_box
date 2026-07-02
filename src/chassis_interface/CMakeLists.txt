@@ -25,7 +25,6 @@ catkin_package(
     pluginlib
     nav_msgs
     geometry_msgs
-    tf
     diagnostic_updater
     std_srvs
   DEPENDS Boost

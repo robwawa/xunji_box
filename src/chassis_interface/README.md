@@ -73,8 +73,11 @@ source devel/setup.bash
 ## 快速使用
 
 ```bash
-# 乐普底盘
+# 乐普底盘 (默认 base_vel 速度积分里程计)
 roslaunch chassis_interface lepu_chassis.launch
+
+# 切换为 nav_pose 绝对位姿里程计
+roslaunch chassis_interface lepu_chassis.launch _odom_source:="nav_pose"
 
 # 指定串口
 roslaunch chassis_interface lepu_chassis.launch port:=/dev/ttyUSB0
@@ -138,14 +141,11 @@ roslaunch chassis_interface template_chassis.launch
 |------|--------|------|
 | `~port` | `/dev/ttyACM0` | 串口设备 |
 | `~baudrate` | 115200 | 波特率 |
-| `~wheel_separation` | 0.242 | 两轮间距 (m) |
-| `~wheel_radius` | 0.0705 | 轮子半径 (m) |
-| `~encoder_ticks_per_rev` | 16384 | 编码器每圈脉冲 |
-| `~use_encoder_odom` | true | 使用编码器里程计 (false=nav_pose) |
+| `~enable_pose_report` | true | 开启 nav_pose 自动上报 |
+| `~odom_source` | `"base_vel"` | 里程计来源: `base_vel`(速度积分) 或 `nav_pose`(绝对位姿) |
 | `~odom_linear_scale` | 1.0 | 线速度标定系数 |
 | `~odom_angular_scale` | 1.0 | 角速度标定系数 |
-| `~encoder_dt_max` | 0.5 | 编码器最大有效间隔 (s) |
-| `~encoder_dt_fallback` | 0.05 | 编码器兜底间隔 (s) |
+| `~dt_max` | 0.5 | 最大有效时间间隔 (s) |
 
 ### 生命周期
 
@@ -163,13 +163,23 @@ UNCONFIGURED → CONFIGURING → READY → RUNNING → ERROR → READY
 
 ## 里程计模式
 
-LepuDriver 支持三种里程计来源，通过 `~use_encoder_odom` 参数切换：
+LepuDriver 支持两种里程计来源，通过 `~odom_source` 参数切换：
 
-| 模式 | 说明 | 适用场景 |
-|------|------|---------|
-| 编码器 (`use_encoder_odom=true`) | 轮式编码器 → 差速模型积分 | 常规使用 |
-| base_vel (`use_encoder_odom=true`) | 底盘上报的线/角速度 | 速度模式 |
-| nav_pose (`use_encoder_odom=false`) | SLAM 全局位姿 → 相对变换 | 编码器不可用时 |
+| 模式 | 协议 | 算法 | 特点 |
+|------|------|------|------|
+| `base_vel` (默认) | `base_vel[v,w]` (§9) | 速度×dt → 中点法积分 | 平滑连续，累积误差 |
+| `nav_pose` | `nav:pose[x,y,θ]` (§27/§37) | 相对 origin 旋转变换 | 绝对值，无累积误差 |
+
+选择逻辑：
+```cpp
+// 启动时读取一次，运行时不切换
+if (odom_source_ == "base_vel")
+    parseBaseVel(msg) → integrateMotion(v*dt, w*dt)
+else if (odom_source_ == "nav_pose")
+    parseNavPose(msg) → origin相对变换
+```
+
+注：官方协议 `core_data`(§4) 和 `wheel_status`(§5) 不含编码器字段，因此无编码器里程计模式。`integrateMotion` 等核心算法保留在驱动中供未来硬件扩展。
 
 ## 接入新底盘
 
@@ -262,10 +272,12 @@ roslaunch chassis_interface template_chassis.launch
 ## 设计要点
 
 - **零外部串口依赖**：使用 POSIX termios，不需 `ros-noetic-serial`
+- **协议合规**：严格按官方 `slam_api.txt` 协议文档实现，逐字段验证
 - **线程安全**：`boost::shared_mutex` 保护里程计状态，`std::mutex` 保护硬件句柄
 - **安全限幅**：`boost::algorithm::clamp` 限制 cmd_vel 幅度
 - **超时停止**：cmd_vel 超过 `~cmd_vel_timeout` 未更新则自动发送零速
 - **参数化协方差**：5 个协方差参数支持按底盘精度标定
+- **里程计算法保留**：`integrateMotion` / `encoderDelta` 等核心算法保留供硬件扩展
 
 ## 许可证
 

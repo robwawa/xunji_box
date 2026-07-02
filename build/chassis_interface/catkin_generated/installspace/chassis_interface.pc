@@ -5,4 +5,4 @@ Description: Description of chassis_interface
 Version: 1.0.0
 Cflags: -I${prefix}/include -I/usr/include
 Libs: -L${prefix}/lib -lchassis_interface /usr/lib/x86_64-linux-gnu/libboost_system.so.1.71.0 /usr/lib/x86_64-linux-gnu/libboost_thread.so.1.71.0
-Requires: roscpp pluginlib nav_msgs geometry_msgs tf diagnostic_updater std_srvs
+Requires: roscpp pluginlib nav_msgs geometry_msgs diagnostic_updater std_srvs

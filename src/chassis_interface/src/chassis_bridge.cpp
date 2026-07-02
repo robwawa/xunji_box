@@ -40,6 +40,12 @@ bool ChassisBridge::init(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   pnh_.param<double>("publish_rate", publish_rate_, 50.0);
   pnh_.param<double>("diag_rate", diag_rate_, 1.0);
 
+  // 参数校验
+  if (publish_rate_ <= 0.0) {
+    ROS_ERROR("[ChassisBridge] publish_rate must be > 0, got %.1f", publish_rate_);
+    return false;
+  }
+
   // 协方差参数（对角线元素，其余为0）
   pnh_.param<double>("cov_pose_xx", cov_pose_xx_, 0.05);
   pnh_.param<double>("cov_pose_yy", cov_pose_yy_, 0.05);
@@ -49,6 +55,7 @@ bool ChassisBridge::init(ros::NodeHandle& nh, ros::NodeHandle& pnh)
 
   // ---- ROS 接口初始化 ----
   odom_pub_ = nh_.advertise<nav_msgs::Odometry>(odom_topic_, odom_queue_size_);
+  cmd_vel_feedback_pub_ = nh_.advertise<geometry_msgs::Twist>("cmd_vel_feedback", 10);
   cmd_vel_sub_ = nh_.subscribe<geometry_msgs::Twist>(
       cmd_vel_topic_, cmd_vel_queue_size_, &ChassisBridge::cmdVelCallback, this);
 
@@ -239,12 +246,14 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
   odom.twist.covariance[35] = cov_twist_yawyaw_; // Yaw  vel_yaw
   odom_pub_.publish(odom);
 
-  // 广播 TF
-  tf::Transform transform;
-  transform.setOrigin(tf::Vector3(state.x, state.y, 0.0));
-  transform.setRotation(tf::createQuaternionFromYaw(state.yaw));
-  tf_broadcaster_.sendTransform(tf::StampedTransform(
-      transform, state.stamp, odom_frame_, base_frame_));
+  // 速度反馈 — MPC 闭环控制使用
+  geometry_msgs::Twist feedback;
+  feedback.linear.x  = state.linear_vel;
+  feedback.angular.z = state.angular_vel;
+  cmd_vel_feedback_pub_.publish(feedback);
+
+  // TF odom→base_link 由 xrobot_driver_odom_fusion 和 xrobot_ukf_localization
+  // 基于 /odom 数据融合发布，chassis_bridge_node 不再重复发布以避免干扰 TF 树
 }
 
 void ChassisBridge::diagTimerCallback(const ros::TimerEvent& event)

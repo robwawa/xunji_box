@@ -95,6 +95,17 @@ public:
 
   /** 获取驱动名称 */
   virtual std::string getDriverName() const;
+
+protected:
+  /** 差速模型里程计积分（中点法）
+   * 调用者负责持有 odom_x_/odom_y_/odom_yaw_ 的锁
+   */
+  static void integrateMotion(double& x, double& y, double& yaw,
+                              double& v, double& w,
+                              double delta_center, double delta_yaw, double dt);
+
+  /** 角度归一化到 [-π, π] */
+  static double normalizeAngle(double angle);
 };
 
 }  // namespace chassis_interface

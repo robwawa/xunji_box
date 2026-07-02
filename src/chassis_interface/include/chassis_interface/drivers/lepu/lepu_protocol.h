@@ -55,9 +55,14 @@ private:
 // ============================================================
 // 消息解析器
 // ============================================================
-bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw);
+/**
+ * 解析 nav_pose / nav:time_pose 消息
+ * @param timestamp [out] 若有 nav:time_pose 格式则填入数据自带时间戳(秒)，否则保持原值
+ * @return 解析成功返回 true
+ */
+bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw,
+                  double* timestamp = nullptr);
 bool parseBaseVel(const std::string& msg, double& linear, double& angular);
-bool parseWheelEncoders(const std::string& msg, int32_t& left, int32_t& right);
 
 // ============================================================
 // POSIX 串口 — 轻量级串口读写（无第三方依赖）
