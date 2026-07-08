@@ -1,3 +1,6 @@
 build/
 devel/
 CLAUDE.md
+*.pdf
+*.md
+*.txt
