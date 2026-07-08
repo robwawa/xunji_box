@@ -1,7 +1,9 @@
 #include <chassis_interface/drivers/lepu/lepu_protocol.h>
+#include <ros/console.h>
 #include <regex>
 #include <cstring>
 #include <cerrno>
+#include <stdexcept>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -73,23 +75,31 @@ bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw,
       std::regex::optimize);
 
   std::smatch m;
-  if (std::regex_search(msg, m, re_time))
+  try
   {
-    // m[1]=x, m[2]=y, m[3]=radian, m[4]=timestamp
-    x = std::stod(m[1]);
-    y = std::stod(m[2]);
-    yaw = std::stod(m[3]);
-    if (timestamp) *timestamp = std::stod(m[4]);
-    return true;
+    if (std::regex_search(msg, m, re_time))
+    {
+      // m[1]=x, m[2]=y, m[3]=radian, m[4]=timestamp
+      x = std::stod(m[1]);
+      y = std::stod(m[2]);
+      yaw = std::stod(m[3]);
+      if (timestamp) *timestamp = std::stod(m[4]);
+      return true;
+    }
+    if (std::regex_search(msg, m, re_pose))
+    {
+      // m[1]=x, m[2]=y, m[3]=radian
+      x = std::stod(m[1]);
+      y = std::stod(m[2]);
+      yaw = std::stod(m[3]);
+      // 3参数格式无时间戳，timestamp保持调用方传入值
+      return true;
+    }
   }
-  if (std::regex_search(msg, m, re_pose))
+  catch (const std::exception& e)
   {
-    // m[1]=x, m[2]=y, m[3]=radian
-    x = std::stod(m[1]);
-    y = std::stod(m[2]);
-    yaw = std::stod(m[3]);
-    // 3参数格式无时间戳，timestamp保持调用方传入值
-    return true;
+    ROS_WARN_STREAM("[LepuDriver] Failed to parse nav_pose: " << msg
+                    << " (" << e.what() << ")");
   }
   return false;
 }
@@ -100,10 +110,19 @@ bool parseBaseVel(const std::string& msg, double& linear, double& angular)
                              std::regex::optimize);
   std::smatch m;
   if (!std::regex_search(msg, m, re)) return false;
-  linear = std::stod(m[1]); angular = std::stod(m[2]);
-  // 打印解析结果
-  printf("parseBaseVel: linear=%.3f, angular=%.3f\n", linear, angular);
-  return true;
+  try
+  {
+    linear = std::stod(m[1]);
+    angular = std::stod(m[2]);
+    ROS_DEBUG("parseBaseVel: linear=%.3f, angular=%.3f", linear, angular);
+    return true;
+  }
+  catch (const std::exception& e)
+  {
+    ROS_WARN_STREAM("[LepuDriver] Failed to parse base_vel: " << msg
+                    << " (" << e.what() << ")");
+    return false;
+  }
 }
 
 

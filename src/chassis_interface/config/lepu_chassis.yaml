@@ -36,6 +36,7 @@ odom_linear_scale: 1.0           # 线速度标定系数
 odom_angular_scale: 1.0          # 角速度标定系数
 dt_max: 0.5                      # s, 最大有效时间间隔
 vel_lpf_alpha: 0.3               # 速度低通滤波系数 (0~1, 越小越平滑, 0.3=中等滤波)
-max_vel_change: 0.5              # m/s², 单周期最大速度变化量(变化率限幅)
+max_vel_change: 0.5              # m/s², 单周期最大线速度变化量(变化率限幅)
+max_angular_vel_change: 1.0      # rad/s², 单周期最大角速度变化量(变化率限幅)
 
 # 注: 官方协议 core_data(§4) wheel_status(§5) 均不含编码器

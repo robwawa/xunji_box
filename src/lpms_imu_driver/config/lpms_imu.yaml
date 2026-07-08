@@ -1,0 +1,7 @@
+# LPMS IG1 IMU 驱动配置 (USB 模式)
+port: "/dev/lpms_imu"
+baudrate: 921600
+startupmode: 1           # 0=Command mode, 1=Streaming mode
+autoreconnect: true
+frame_id: "imu"
+rate: 200                 # Hz, 发布频率

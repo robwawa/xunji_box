@@ -66,12 +66,14 @@ private:
   double last_nav_x_ = 0.0, last_nav_y_ = 0.0, last_nav_yaw_ = 0.0;
   ros::Time last_nav_pose_time_;
   double last_data_ts_ = 0.0;        // 上一帧 nav:time_pose 自带时间戳
+  bool last_data_ts_valid_ = false;   // last_data_ts_ 是否已初始化（替代 >0.0 检查）
 
   // 低通滤波 — 抑制位置差分噪声
   double vel_lpf_alpha_ = 0.3;       // 滤波系数 (0~1, 越小越平滑)
   double filtered_linear_vel_ = 0.0;
   double filtered_angular_vel_ = 0.0;
-  double max_vel_change_ = 0.5;      // m/s², 单周期最大速度变化
+  double max_vel_change_ = 0.5;      // m/s², 单周期最大线速度变化
+  double max_angular_vel_change_ = 1.0; // rad/s², 单周期最大角速度变化
 
   // ---- 诊断 ----
   std::atomic<int> msg_count_{0};
@@ -102,6 +104,7 @@ bool LepuDriver::connect(ros::NodeHandle& nh)
   nh.param<double>("dt_max", dt_max_, 0.5);
   nh.param<double>("vel_lpf_alpha", vel_lpf_alpha_, 0.3);
   nh.param<double>("max_vel_change", max_vel_change_, 0.5);
+  nh.param<double>("max_angular_vel_change", max_angular_vel_change_, 1.0);
 
   // 创建串口链路
   serial_.reset(new LepuSerialLink(port_, baudrate_,
@@ -182,14 +185,30 @@ ChassisState LepuDriver::readState()
   // 超时归零 — 停止后速度衰减到0
   {
     double age = 0.0;
-    if (odom_source_ == "base_vel" && base_vel_initialized_)
-      age = (ros::Time::now() - last_base_vel_time_).toSec();
-    else if (odom_source_ == "nav_pose" && last_nav_pose_time_.isValid())
-      age = (ros::Time::now() - last_nav_pose_time_).toSec();
-    if (age > dt_max_)
+    bool check_timeout = false;
+    {
+      boost::shared_lock<boost::shared_mutex> lock(state_mutex_);
+      if (odom_source_ == "base_vel" && base_vel_initialized_)
+      {
+        age = (ros::Time::now() - last_base_vel_time_).toSec();
+        check_timeout = true;
+      }
+      else if (odom_source_ == "nav_pose" && last_nav_pose_time_.isValid())
+      {
+        age = (ros::Time::now() - last_nav_pose_time_).toSec();
+        check_timeout = true;
+      }
+    }
+    if (check_timeout && age > dt_max_)
     {
       state.linear_vel = 0.0;
       state.angular_vel = 0.0;
+      // 同步清零滤波器状态，防止恢复时速度从旧值衰减
+      boost::unique_lock<boost::shared_mutex> lock(state_mutex_);
+      filtered_linear_vel_ = 0.0;
+      filtered_angular_vel_ = 0.0;
+      linear_vel_ = 0.0;
+      angular_vel_ = 0.0;
     }
   }
 
@@ -244,6 +263,7 @@ void LepuDriver::resetOdom()
   filtered_linear_vel_ = 0.0;
   filtered_angular_vel_ = 0.0;
   pose_origin_set_ = false;
+  last_data_ts_valid_ = false;
 }
 
 void LepuDriver::getDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat)
@@ -358,7 +378,11 @@ void LepuDriver::handleMessage(const std::string& msg)
         last_nav_x_ = 0.0; last_nav_y_ = 0.0; last_nav_yaw_ = 0.0;
         filtered_linear_vel_ = 0.0; filtered_angular_vel_ = 0.0;
         last_nav_pose_time_ = now;
-        if (has_data_ts) last_data_ts_ = data_ts;
+        last_data_ts_valid_ = true;   // 原点已设，时间戳基准就绪
+        if (has_data_ts)
+        {
+          last_data_ts_ = data_ts;
+        }
         return;
       }
 
@@ -376,7 +400,7 @@ void LepuDriver::handleMessage(const std::string& msg)
       // 若两条都计算速度，第二条 dx≈0 会通过低通滤波把速度拉向零。
       // 策略：nav:time_pose → 计算速度并更新 last_nav；nav:pose → 只更新位置。
       const double MIN_VEL_DT = 0.02;  // 最小有效计算间隔 (50Hz)
-      if (has_data_ts && last_data_ts_ > 0.0 && last_nav_pose_time_.isValid())
+      if (has_data_ts && last_data_ts_valid_ && last_nav_pose_time_.isValid())
       {
         double nav_dt = data_ts - last_data_ts_;
         if (nav_dt >= MIN_VEL_DT && nav_dt <= dt_max_)
@@ -398,10 +422,11 @@ void LepuDriver::handleMessage(const std::string& msg)
 
           // 变化率限幅 — 防止SLAM重定位等导致的瞬时跳变
           double max_dv = max_vel_change_ * nav_dt;
+          double max_dw = max_angular_vel_change_ * nav_dt;
           if (std::abs(flv - filtered_linear_vel_) > max_dv)
             flv = filtered_linear_vel_ + std::copysign(max_dv, flv - filtered_linear_vel_);
-          if (std::abs(fav - filtered_angular_vel_) > max_dv)
-            fav = filtered_angular_vel_ + std::copysign(max_dv, fav - filtered_angular_vel_);
+          if (std::abs(fav - filtered_angular_vel_) > max_dw)
+            fav = filtered_angular_vel_ + std::copysign(max_dw, fav - filtered_angular_vel_);
 
           filtered_linear_vel_ = flv;
           filtered_angular_vel_ = fav;
@@ -419,7 +444,15 @@ void LepuDriver::handleMessage(const std::string& msg)
           last_nav_pose_time_ = now;
           last_data_ts_ = data_ts;
         }
-        // dt 异常时跳过，不更新 last_nav，位移累积到下一有效帧
+        else if (nav_dt > dt_max_ || nav_dt < 0.0)
+        {
+          // dt 超限/回退：不计算速度，但更新基准防止后续帧异常
+          // 同时更新 last_nav 防止下一帧 dx 跨越异常区间导致速度尖峰
+          last_data_ts_ = data_ts;
+          last_nav_x_ = odom_x_; last_nav_y_ = odom_y_; last_nav_yaw_ = odom_yaw_;
+          last_nav_pose_time_ = now;
+        }
+        // dt < MIN_VEL_DT: 跳过，不更新 last_nav 也不更新时间戳，位移累积
       }
     }
   }

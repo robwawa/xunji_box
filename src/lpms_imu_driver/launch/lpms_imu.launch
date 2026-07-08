@@ -1,0 +1,40 @@
+<launch>
+  <!-- ============================================================
+       LPMS IG1 IMU 驱动启动文件
+       ============================================================ -->
+
+  <!-- 连接模式: usb(默认) | rs485 -->
+  <arg name="mode" default="usb" doc="Connection mode: usb or rs485"/>
+
+  <!-- 设备端口 -->
+  <arg name="port" default="/dev/lpms_imu" doc="Serial port device"/>
+  <arg name="baudrate" default="921600" doc="Serial baudrate"/>
+  <arg name="frame_id" default="imu" doc="IMU frame id"/>
+  <arg name="rate" default="200" doc="Publish rate (Hz)"/>
+
+  <!-- 加载配置 -->
+  <rosparam file="$(find lpms_imu_driver)/config/lpms_imu.yaml" command="load" ns="imu"/>
+
+  <!-- 命令行覆盖 -->
+  <param name="imu/port" value="$(arg port)"/>
+  <param name="imu/baudrate" value="$(arg baudrate)"/>
+  <param name="imu/frame_id" value="$(arg frame_id)"/>
+  <param name="imu/rate" value="$(arg rate)"/>
+
+  <!-- USB 节点 (默认) -->
+  <node if="$(eval arg('mode') == 'usb')"
+        name="imu" pkg="lpms_imu_driver" type="lpms_ig1_node" output="screen">
+    <remap from="/imu/data" to="/imu"/>
+    <remap from="/imu/mag" to="/imu_mag"/>
+    <remap from="/imu/imu_yaw" to="/imu_yaw"/>
+  </node>
+
+  <!-- RS485 节点 -->
+  <node if="$(eval arg('mode') == 'rs485')"
+        name="imu" pkg="lpms_imu_driver" type="lpms_ig1_rs485_node" output="screen">
+    <remap from="/imu/data" to="/imu"/>
+    <remap from="/imu/mag" to="/imu_mag"/>
+    <remap from="/imu/imu_yaw" to="/imu_yaw"/>
+  </node>
+
+</launch>
