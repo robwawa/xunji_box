@@ -58,6 +58,13 @@ public:
     int rs485ControlPin;
     int rs485ControlPinToggleWaitMs;
     int rate;
+    int imu_offset_samples_;
+
+    // IMU 零偏校准
+    bool imu_offset_calibrated_ = false;
+    int imu_offset_count_ = 0;
+    double calib_w_sum_ = 0, calib_x_sum_ = 0, calib_y_sum_ = 0, calib_z_sum_ = 0;
+    double offset_conj_w_ = 1, offset_conj_x_ = 0, offset_conj_y_ = 0, offset_conj_z_ = 0;
 
     LpIG1Proxy(ros::NodeHandle h) : 
         nh(h),
@@ -72,6 +79,7 @@ public:
         private_nh.param("rs485ControlPinToggleWaitMs", rs485ControlPinToggleWaitMs, 2);
         private_nh.param<std::string>("frame_id", frame_id, "imu");
         private_nh.param("rate", rate, 200);
+        private_nh.param("imu_offset_samples", imu_offset_samples_, 100);
 
         // Create LpmsIG1 object 
         sensor1 = IG1Factory();
@@ -127,6 +135,23 @@ public:
         {
             ROS_INFO("Sensor connected");
             ros::Duration(1).sleep();
+
+            // 使能 Gyro 校准数据输出 (同 USB 版本)
+            {
+              uint32_t gyro_config =
+                  TDR_ACC_CALIBRATED_OUTPUT_ENABLED
+                | TDR_GYR0_ALIGN_CALIBRATED_OUTPUT_ENABLED
+                | TDR_MAG_RAW_OUTPUT_ENABLED
+                | TDR_QUAT_OUTPUT_ENABLED
+                | TDR_LINACC_OUTPUT_ENABLED;
+              sensor1->commandGotoCommandMode();
+              ros::Duration(0.1).sleep();
+              sensor1->sendCommand(SET_IMU_TRANSMIT_DATA, 4,
+                                   reinterpret_cast<unsigned char*>(&gyro_config));
+              ros::Duration(0.1).sleep();
+              ROS_INFO("IMU gyro data output enabled (config=0x%04X)", gyro_config);
+            }
+
             //sensor1->commandGotoStreamingMode();
         }
         else 
@@ -156,6 +181,42 @@ public:
             IG1ImuDataI sd;
             sensor1->getImuData(sd);
 
+            // ---- IMU 零偏校准：上电后取前 N 组四元数均值作为偏移 ----
+            if (!imu_offset_calibrated_)
+            {
+                calib_w_sum_ += sd.quaternion.data[0];
+                calib_x_sum_ += sd.quaternion.data[1];
+                calib_y_sum_ += sd.quaternion.data[2];
+                calib_z_sum_ += sd.quaternion.data[3];
+                imu_offset_count_++;
+                if (imu_offset_count_ >= imu_offset_samples_)
+                {
+                    double n = imu_offset_count_;
+                    double qw = calib_w_sum_ / n, qx = calib_x_sum_ / n;
+                    double qy = calib_y_sum_ / n, qz = calib_z_sum_ / n;
+                    double norm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+                    if (norm > 1e-9) { qw /= norm; qx /= norm; qy /= norm; qz /= norm; }
+                    offset_conj_w_ = qw;
+                    offset_conj_x_ = -qx;
+                    offset_conj_y_ = -qy;
+                    offset_conj_z_ = -qz;
+                    imu_offset_calibrated_ = true;
+                    ROS_INFO("[LpIG1-RS485] IMU offset calibrated (%d samples)", imu_offset_count_);
+                }
+            }
+            double qw, qx, qy, qz;
+            if (imu_offset_calibrated_)
+            {
+                double aw = offset_conj_w_, ax = offset_conj_x_, ay = offset_conj_y_, az = offset_conj_z_;
+                double bw = sd.quaternion.data[0], bx = sd.quaternion.data[1];
+                double by = sd.quaternion.data[2], bz = sd.quaternion.data[3];
+                qw = aw*bw - ax*bx - ay*by - az*bz;
+                qx = aw*bx + ax*bw + ay*bz - az*by;
+                qy = aw*by - ax*bz + ay*bw + az*bx;
+                qz = aw*bz + ax*by - ay*bx + az*bw;
+            }
+            else { qw=sd.quaternion.data[0]; qx=sd.quaternion.data[1]; qy=sd.quaternion.data[2]; qz=sd.quaternion.data[3]; }
+
             /* Fill the IMU message */
 
             // Fill the header
@@ -166,18 +227,20 @@ public:
             imu_msg.orientation.w = sd.quaternion.data[0];
             imu_msg.orientation.x = -sd.quaternion.data[1];
             imu_msg.orientation.y = -sd.quaternion.data[2];
-            imu_msg.orientation.z = -sd.quaternion.data[3];
+            // Yaw 方向：传感器原始为 CW+，恢复后取反转为 ROS 标准 CCW+
+            imu_msg.orientation.z = sd.quaternion.data[3];
 
             // Fill angular velocity data
-            // - scale from deg/s to rad/s
+            // - scale from deg/s to rad/s, 取反转为 ROS CCW+
             imu_msg.angular_velocity.x = sd.gyroIAlignmentCalibrated.data[0]*3.1415926/180;
             imu_msg.angular_velocity.y = sd.gyroIAlignmentCalibrated.data[1]*3.1415926/180;
-            imu_msg.angular_velocity.z = sd.gyroIAlignmentCalibrated.data[2]*3.1415926/180;
+            imu_msg.angular_velocity.z = -sd.gyroIAlignmentCalibrated.data[2]*3.1415926/180;
 
             // Fill linear acceleration data
             imu_msg.linear_acceleration.x = -sd.accCalibrated.data[0]*9.81;
             imu_msg.linear_acceleration.y = -sd.accCalibrated.data[1]*9.81;
-            imu_msg.linear_acceleration.z = -sd.accCalibrated.data[2]*9.81;
+            // Z 取反移除：与 orientation.z 保持一致（传感器 z-down → ROS z-up）
+            imu_msg.linear_acceleration.z = sd.accCalibrated.data[2]*9.81;
 
             /* Fill the magnetometer message */
             mag_msg.header.stamp = imu_msg.header.stamp;

@@ -55,6 +55,13 @@ public:
     bool autoReconnect;
     std::string frame_id;
     int rate;
+    int imu_offset_samples_;
+
+    // IMU 零偏校准
+    bool imu_offset_calibrated_ = false;
+    int imu_offset_count_ = 0;
+    double calib_w_sum_ = 0, calib_x_sum_ = 0, calib_y_sum_ = 0, calib_z_sum_ = 0;
+    double offset_conj_w_ = 1, offset_conj_x_ = 0, offset_conj_y_ = 0, offset_conj_z_ = 0;
 
     LpIG1Proxy(ros::NodeHandle h) : 
         nh(h),
@@ -66,6 +73,7 @@ public:
         private_nh.param("autoreconnect", autoReconnect, true);
         private_nh.param<std::string>("frame_id", frame_id, "imu");
         private_nh.param("rate", rate, 200);
+        private_nh.param("imu_offset_samples", imu_offset_samples_, 100);
 
         // Create LpmsIG1 object 
         sensor1 = IG1Factory();
@@ -114,6 +122,26 @@ public:
         {
             ROS_INFO("Sensor connected");
             ros::Duration(1).sleep();
+
+            // 使能 Gyro 数据输出
+            // 传感器默认 TDR 未使能角速度相关 bit。
+            // 同时启用 bit6 (GYR0_ALIGN_CALIBRATED) 和 bit10 (ANGULAR_VELOCITY)
+            // 优先使用 sd.angularVelocity 字段。
+            {
+              uint32_t gyro_config =
+                  TDR_ACC_CALIBRATED_OUTPUT_ENABLED
+                | TDR_GYR0_ALIGN_CALIBRATED_OUTPUT_ENABLED
+                | TDR_ANGULAR_VELOCITY_OUTPUT_ENABLED
+                | TDR_MAG_RAW_OUTPUT_ENABLED
+                | TDR_QUAT_OUTPUT_ENABLED
+                | TDR_LINACC_OUTPUT_ENABLED;
+              sensor1->commandSetTransmitData(gyro_config);
+              ros::Duration(0.2).sleep();
+              sensor1->commandSaveParameters();
+              ros::Duration(0.5).sleep();
+              ROS_INFO("IMU gyro data enabled & saved (config=0x%04X)", gyro_config);
+            }
+
             sensor1->commandGotoStreamingMode();
         }
         else 
@@ -143,6 +171,45 @@ public:
             IG1ImuDataI sd;
             sensor1->getImuData(sd);
 
+            // ---- IMU 零偏校准：上电后取前 N 组四元数均值作为偏移 ----
+            if (!imu_offset_calibrated_)
+            {
+                calib_w_sum_ += sd.quaternion.data[0];
+                calib_x_sum_ += sd.quaternion.data[1];
+                calib_y_sum_ += sd.quaternion.data[2];
+                calib_z_sum_ += sd.quaternion.data[3];
+                imu_offset_count_++;
+                if (imu_offset_count_ >= imu_offset_samples_)
+                {
+                    double n = imu_offset_count_;
+                    double qw = calib_w_sum_ / n, qx = calib_x_sum_ / n;
+                    double qy = calib_y_sum_ / n, qz = calib_z_sum_ / n;
+                    // 归一化平均四元数
+                    double norm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+                    if (norm > 1e-9) { qw /= norm; qx /= norm; qy /= norm; qz /= norm; }
+                    // 存共轭（逆旋转），用于抵消初始偏置
+                    offset_conj_w_ = qw;
+                    offset_conj_x_ = -qx;
+                    offset_conj_y_ = -qy;
+                    offset_conj_z_ = -qz;
+                    imu_offset_calibrated_ = true;
+                    ROS_INFO("[LpIG1] IMU offset calibrated (%d samples)", imu_offset_count_);
+                }
+            }
+            // 应用零偏：q_corrected = offset_conj * q_raw
+            double qw, qx, qy, qz;
+            if (imu_offset_calibrated_)
+            {
+                double aw = offset_conj_w_, ax = offset_conj_x_, ay = offset_conj_y_, az = offset_conj_z_;
+                double bw = sd.quaternion.data[0], bx = sd.quaternion.data[1];
+                double by = sd.quaternion.data[2], bz = sd.quaternion.data[3];
+                qw = aw*bw - ax*bx - ay*by - az*bz;
+                qx = aw*bx + ax*bw + ay*bz - az*by;
+                qy = aw*by - ax*bz + ay*bw + az*bx;
+                qz = aw*bz + ax*by - ay*bx + az*bw;
+            }
+            else { qw=sd.quaternion.data[0]; qx=sd.quaternion.data[1]; qy=sd.quaternion.data[2]; qz=sd.quaternion.data[3]; }
+
             /* Fill the IMU message */
 
             // Fill the header
@@ -150,21 +217,41 @@ public:
             imu_msg.header.frame_id = frame_id;
 
             // Fill orientation quaternion
-            imu_msg.orientation.w = sd.quaternion.data[0];
-            imu_msg.orientation.x = -sd.quaternion.data[1];
-            imu_msg.orientation.y = -sd.quaternion.data[2];
-            imu_msg.orientation.z = -sd.quaternion.data[3];
+            imu_msg.orientation.w = qw;
+            imu_msg.orientation.x = -qx;
+            imu_msg.orientation.y = -qy;
+            // Yaw 方向：传感器原始为 CW+，恢复后取反转为 ROS 标准 CCW+
+            imu_msg.orientation.z = qz;
 
             // Fill angular velocity data
-            // - scale from deg/s to rad/s
-            imu_msg.angular_velocity.x = sd.gyroIAlignmentCalibrated.data[0]*3.1415926/180;
-            imu_msg.angular_velocity.y = sd.gyroIAlignmentCalibrated.data[1]*3.1415926/180;
-            imu_msg.angular_velocity.z = sd.gyroIAlignmentCalibrated.data[2]*3.1415926/180;
+            // 优先使用 sd.angularVelocity (TDR bit10), 若为0则回退到
+            // sd.gyroIAlignmentCalibrated (TDR bit6)
+            // 传感器输出单位为 deg/s，需转换为 rad/s
+            // 传感器坐标系 X前-Y右-Z下，转换为 ROS X前-Y左-Z上：
+            //   ωx→ωx, ωy→-ωy, ωz→-ωz (绕X轴180°旋转)
+            {
+              double avx = sd.angularVelocity.data[0];
+              double avy = sd.angularVelocity.data[1];
+              double avz = sd.angularVelocity.data[2];
+              if (std::abs(avx) < 1e-9 && std::abs(avy) < 1e-9 && std::abs(avz) < 1e-9)
+              {
+                avx = sd.gyroIAlignmentCalibrated.data[0];
+                avy = sd.gyroIAlignmentCalibrated.data[1];
+                avz = sd.gyroIAlignmentCalibrated.data[2];
+              }
+              const double DEG2RAD = M_PI / 180.0;
+              // sd.angularVelocity 已是传感器处理后的角速度，坐标系已正确
+              // 仅需 deg/s→rad/s 转换，不需要取反
+              imu_msg.angular_velocity.x =  avx * DEG2RAD;
+              imu_msg.angular_velocity.y =  avy * DEG2RAD;
+              imu_msg.angular_velocity.z =  avz * DEG2RAD;
+            }
 
             // Fill linear acceleration data
             imu_msg.linear_acceleration.x = -sd.accCalibrated.data[0]*9.81;
             imu_msg.linear_acceleration.y = -sd.accCalibrated.data[1]*9.81;
-            imu_msg.linear_acceleration.z = -sd.accCalibrated.data[2]*9.81;
+            // Z 取反移除：与 orientation.z 保持一致（传感器 z-down → ROS z-up）
+            imu_msg.linear_acceleration.z = sd.accCalibrated.data[2]*9.81;
 
             /* Fill the magnetometer message */
             mag_msg.header.stamp = imu_msg.header.stamp;

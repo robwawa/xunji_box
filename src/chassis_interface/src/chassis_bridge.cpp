@@ -56,6 +56,8 @@ bool ChassisBridge::init(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   // ---- ROS 接口初始化 ----
   odom_pub_ = nh_.advertise<nav_msgs::Odometry>(odom_topic_, odom_queue_size_);
   cmd_vel_feedback_pub_ = nh_.advertise<geometry_msgs::Twist>("cmd_vel_feedback", 10);
+  cmd_vel_feedback_odom_pub_ = nh_.advertise<nav_msgs::Odometry>("cmd_vel_feedback_odom", 10);
+  odom_yaw_pub_ = nh_.advertise<std_msgs::Float32>("odom_yaw", 10);
   cmd_vel_sub_ = nh_.subscribe<geometry_msgs::Twist>(
       cmd_vel_topic_, cmd_vel_queue_size_, &ChassisBridge::cmdVelCallback, this);
 
@@ -251,6 +253,14 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
   feedback.linear.x  = state.linear_vel;
   feedback.angular.z = state.angular_vel;
   cmd_vel_feedback_pub_.publish(feedback);
+
+  // /cmd_vel_feedback_odom — Odometry格式的速度反馈
+  cmd_vel_feedback_odom_pub_.publish(odom);
+
+  // /odom_yaw — 单独的偏航角
+  std_msgs::Float32 yaw_msg;
+  yaw_msg.data = state.yaw;
+  odom_yaw_pub_.publish(yaw_msg);
 
   // TF odom→base_link 由 xrobot_driver_odom_fusion 和 xrobot_ukf_localization
   // 基于 /odom 数据融合发布，chassis_bridge_node 不再重复发布以避免干扰 TF 树

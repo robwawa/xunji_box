@@ -6,6 +6,7 @@
 #include <tf/transform_datatypes.h>
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Twist.h>
+#include <std_msgs/Float32.h>
 #include <diagnostic_msgs/DiagnosticArray.h>
 #include <diagnostic_updater/diagnostic_updater.h>
 #include <std_srvs/Trigger.h>
@@ -80,6 +81,8 @@ private:
   // 话题
   ros::Publisher odom_pub_;
   ros::Publisher cmd_vel_feedback_pub_;
+  ros::Publisher cmd_vel_feedback_odom_pub_;  // /cmd_vel_feedback_odom
+  ros::Publisher odom_yaw_pub_;               // /odom_yaw
   ros::Subscriber cmd_vel_sub_;
 
   // 服务

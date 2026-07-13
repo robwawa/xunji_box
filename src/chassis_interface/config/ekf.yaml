@@ -1,0 +1,37 @@
+# ============================================================
+# robot_localization EKF 配置
+# 融合 /wheel_odom (SLAM里程计) + /imu (IMU陀螺仪)
+# 输出 /odometry/filtered + TF: odom→base_link
+# 15 项: [x y z] [roll pitch yaw] [vx vy vz] [vroll vpitch vyaw] [ax ay az]
+# ============================================================
+
+frequency: 50
+sensor_timeout: 0.1
+two_d_mode: true
+
+# --- 输入1: 轮式里程计 (SLAM) ---
+odom0: /wheel_odom
+odom0_config:
+  [true,  true,  false,   # x y z
+   false, false, true,    # roll pitch yaw
+   true,  true,  false,   # vx vy vz
+   false, false, true,    # vroll vpitch vyaw
+   false, false, false]   # ax ay az
+odom0_differential: true
+
+# --- 输入2: IMU ---
+imu0: /imu
+imu0_config:
+  [false, false, false,   # x y z
+   false, false, true,    # roll pitch yaw — 使用IMU yaw航向
+   false, false, false,   # vx vy vz
+   false, false, true,    # vroll vpitch vyaw — 使用IMU yaw角速度
+   false, false, false]   # ax ay az
+imu0_differential: false
+imu0_remove_gravitational_acceleration: false
+
+# --- 输出 ---
+publish_tf: false
+odom_frame: odom
+base_link_frame: base_link
+world_frame: odom

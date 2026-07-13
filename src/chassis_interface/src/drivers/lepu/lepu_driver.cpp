@@ -78,6 +78,10 @@ private:
   // ---- 诊断 ----
   std::atomic<int> msg_count_{0};
   std::atomic<int> error_count_{0};
+
+  // ---- 模式切换确认 ----
+  std::atomic<bool> nav_mode_confirmed_{false};
+  std::string nav_mode_expected_response_;  // e.g. "model:2" for mapping
 };
 
 LepuDriver::LepuDriver()
@@ -118,15 +122,49 @@ bool LepuDriver::connect(ros::NodeHandle& nh)
 
   ROS_INFO_STREAM("[LepuDriver] Opened " << port_ << " @ " << baudrate_ << " baud");
 
-  // 初始化底盘
-  serial_->sendCommand("model:request");
-  if (nav_mode_ == "navi")
-    serial_->sendCommand("model:navi");
-  else if (nav_mode_ == "remap")
-    serial_->sendCommand("model:remap");
-  else if (nav_mode_ == "mapping")
-    serial_->sendCommand("model:mapping");
-  ROS_INFO("[LepuDriver] nav_mode=%s", nav_mode_.c_str());
+  // 初始化底盘 — 持续发送模式切换指令直到确认
+  {
+    std::string mode_cmd;
+    if (nav_mode_ == "navi")
+    {
+      mode_cmd = "model:navi";
+      nav_mode_expected_response_ = "model:1";
+    }
+    else if (nav_mode_ == "remap")
+    {
+      mode_cmd = "model:remap";
+      nav_mode_expected_response_ = "model:3";
+    }
+    else // mapping
+    {
+      mode_cmd = "model:mapping";
+      nav_mode_expected_response_ = "model:2";
+    }
+    ROS_INFO("[LepuDriver] nav_mode=%s, waiting for %s confirmation",
+             nav_mode_.c_str(), nav_mode_expected_response_.c_str());
+
+    // 持续发送模式切换指令，直到底盘确认（阻塞等待，不设超时）
+    ros::Rate r(2);  // 2Hz
+    while (!nav_mode_confirmed_ && ros::ok())
+    {
+      // 检查串口连接
+      {
+        std::lock_guard<std::mutex> lock(serial_mutex_);
+        if (!serial_ || !serial_->isOpen())
+        {
+          ROS_ERROR("[LepuDriver] Serial lost during mode confirmation");
+          return false;
+        }
+        // 先查询当前模式，再发送切换指令
+        serial_->sendCommand("model:request");
+        serial_->sendCommand(mode_cmd);
+      }
+      ros::spinOnce();
+      r.sleep();
+    }
+    if (!ros::ok()) return false;
+    ROS_INFO("[LepuDriver] Nav mode confirmed: %s", nav_mode_expected_response_.c_str());
+  }
 
   if (enable_pose_report_)
   {
@@ -315,6 +353,11 @@ void LepuDriver::handleMessage(const std::string& msg)
   if (msg.find("model:") == 0 || msg.find("hfls_version:") == 0)
   {
     ROS_INFO_STREAM("[LepuDriver] " << msg);
+    // 检测模式切换确认: model:1(navi) model:2(mapping) model:3(remap)
+    if (!nav_mode_confirmed_ && msg == nav_mode_expected_response_)
+    {
+      nav_mode_confirmed_ = true;
+    }
     return;
   }
 

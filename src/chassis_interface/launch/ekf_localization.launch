@@ -1,0 +1,20 @@
+<launch>
+  <!-- ============================================================
+       robot_localization EKF 节点
+       融合 /wheel_odom + /imu → /odom + TF: odom→base_link
+
+       前置依赖：chassis_bridge_node 已发布 /wheel_odom
+                 xrobot_driver_imu 已发布 /imu
+       ============================================================ -->
+
+  <!-- 静态 TF: base_link → imu (IMU固定在机器人中心，无偏移) -->
+  <node pkg="tf" type="static_transform_publisher" name="imu_tf_broadcaster"
+        args="0 0 0 0 0 0 base_link imu 100"/>
+
+  <node pkg="robot_localization" type="ekf_localization_node"
+        name="ekf_localization" output="screen">
+    <rosparam file="$(find chassis_interface)/config/ekf.yaml" command="load"/>
+    <remap from="/odometry/filtered" to="/odom"/>
+  </node>
+
+</launch>
