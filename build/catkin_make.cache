@@ -1,2 +1,0 @@
-chassis_interface:lepu_chassis
--DCATKIN_DEVEL_PREFIX=/home/wa/inspection/巡迹导航盒子/test_ws/devel -DCMAKE_INSTALL_PREFIX=/home/wa/inspection/巡迹导航盒子/test_ws/install -G Unix Makefiles

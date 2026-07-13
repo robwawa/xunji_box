@@ -1,8 +1,0 @@
-prefix=/home/wa/inspection/巡迹导航盒子/test_ws/install
-
-Name: lepu_chassis
-Description: Description of lepu_chassis
-Version: 1.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 
