@@ -1,6 +1,21 @@
+# IDE
+.vscode/
+.marscode/
+
+# 编译产物
 build/
 devel/
+install/
+
+# Python
+__pycache__/
+*.pyc
+
+# 文档
 CLAUDE.md
 *.pdf
 *.md
 *.txt
+
+# 临时文件
+tmp/
