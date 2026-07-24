@@ -1,6 +1,7 @@
 #ifndef CHASSIS_INTERFACE_CHASSIS_DRIVER_H
 #define CHASSIS_INTERFACE_CHASSIS_DRIVER_H
 
+#include <cstdint>
 #include <string>
 #include <ros/ros.h>
 #include <diagnostic_updater/DiagnosticStatusWrapper.h>
@@ -17,6 +18,7 @@ struct ChassisState
   double y = 0.0;               // 里程计位置 Y (m)
   double yaw = 0.0;             // 里程计偏航角 (rad)
   double linear_vel = 0.0;      // 线速度 (m/s)
+  double linear_vel_y = 0.0;    // 横向速度 (m/s)，车体坐标系 Y 向左为正
   double angular_vel = 0.0;     // 角速度 (rad/s)
   int32_t left_encoder = 0;     // 左轮编码器原始值
   int32_t right_encoder = 0;    // 右轮编码器原始值
@@ -52,8 +54,8 @@ enum class LifecycleState
 // ============================================================
 // ChassisDriver — 底盘驱动抽象基类
 //
-// 所有底盘驱动必须继承此类并实现纯虚函数。
-// 使用 pluginlib 加载，参见 chassis_interface_plugin.xml
+// pluginlib 的稳定入口。普通底盘优先继承 common_chassis_driver.h 中与
+// 硬件反馈匹配的里程计父类，仅实现协议收发。
 // ============================================================
 class ChassisDriver
 {

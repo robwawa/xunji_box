@@ -41,6 +41,7 @@ include_directories(
 # ============================================================
 add_library(chassis_interface
   src/chassis_driver.cpp
+  src/common_chassis_driver.cpp
   src/drivers/lepu/lepu_driver.cpp
   src/drivers/lepu/lepu_protocol.cpp
   src/drivers/template_driver.cpp
@@ -62,6 +63,32 @@ target_link_libraries(chassis_bridge_node
   ${catkin_LIBRARIES}
   ${Boost_LIBRARIES}
 )
+
+# ============================================================
+# Tests — 公共里程计模型
+# ============================================================
+if(CATKIN_ENABLE_TESTING)
+  find_package(rostest REQUIRED)
+  add_rostest_gtest(test_kinematic_odometry
+    test/kinematic_odometry.test
+    test/test_kinematic_odometry.cpp
+  )
+  target_link_libraries(test_kinematic_odometry
+    chassis_interface
+    ${catkin_LIBRARIES}
+  )
+
+  catkin_add_gtest(lepu_serial_link_test
+    test/lepu_serial_link_test.cpp
+  )
+  if(TARGET lepu_serial_link_test)
+    target_link_libraries(lepu_serial_link_test
+      chassis_interface
+      ${catkin_LIBRARIES}
+      util
+    )
+  endif()
+endif()
 
 # ============================================================
 # Install

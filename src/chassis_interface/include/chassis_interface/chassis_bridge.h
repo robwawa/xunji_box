@@ -76,7 +76,7 @@ private:
 
   // 里程计协方差参数
   double cov_pose_xx_, cov_pose_yy_, cov_pose_yawyaw_;
-  double cov_twist_xx_, cov_twist_yawyaw_;
+  double cov_twist_xx_, cov_twist_yy_, cov_twist_yawyaw_;
 
   // 话题
   ros::Publisher odom_pub_;

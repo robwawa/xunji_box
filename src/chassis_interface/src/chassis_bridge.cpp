@@ -51,6 +51,7 @@ bool ChassisBridge::init(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   pnh_.param<double>("cov_pose_yy", cov_pose_yy_, 0.05);
   pnh_.param<double>("cov_pose_yawyaw", cov_pose_yawyaw_, 0.1);
   pnh_.param<double>("cov_twist_xx", cov_twist_xx_, 0.05);
+  pnh_.param<double>("cov_twist_yy", cov_twist_yy_, 0.05);
   pnh_.param<double>("cov_twist_yawyaw", cov_twist_yawyaw_, 0.05);
 
   // ---- ROS 接口初始化 ----
@@ -226,7 +227,16 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
   }
   else if (state.is_connected && lifecycle_ == LifecycleState::ERROR)
   {
-    transitionTo(LifecycleState::RUNNING);
+    transitionTo(enabled_ ? LifecycleState::RUNNING : LifecycleState::READY);
+  }
+
+  // 链路断联或数据陈旧时，不给旧状态刷新时间戳。
+  // 仅发布零速度反馈，里程计相关话题等待有效数据恢复。
+  if (!state.is_connected)
+  {
+    geometry_msgs::Twist feedback;
+    cmd_vel_feedback_pub_.publish(feedback);
+    return;
   }
 
   // 发布里程计
@@ -239,18 +249,21 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
   odom.pose.pose.position.z = 0.0;
   odom.pose.pose.orientation = tf::createQuaternionMsgFromYaw(state.yaw);
   odom.twist.twist.linear.x = state.linear_vel;
+  odom.twist.twist.linear.y = state.linear_vel_y;
   odom.twist.twist.angular.z = state.angular_vel;
   // 协方差（通过参数可调，默认值适用于一般编码器里程计）
   odom.pose.covariance[0]  = cov_pose_xx_;      //  X   pos_x
   odom.pose.covariance[7]  = cov_pose_yy_;      //  Y   pos_y
   odom.pose.covariance[35] = cov_pose_yawyaw_;   // Yaw  pos_yaw
   odom.twist.covariance[0]  = cov_twist_xx_;     //  X   vel_x
+  odom.twist.covariance[7]  = cov_twist_yy_;     //  Y   vel_y
   odom.twist.covariance[35] = cov_twist_yawyaw_; // Yaw  vel_yaw
   odom_pub_.publish(odom);
 
   // 速度反馈 — MPC 闭环控制使用
   geometry_msgs::Twist feedback;
   feedback.linear.x  = state.linear_vel;
+  feedback.linear.y  = state.linear_vel_y;
   feedback.angular.z = state.angular_vel;
   cmd_vel_feedback_pub_.publish(feedback);
 

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <condition_variable>
 
 namespace chassis_interface
 {
@@ -64,6 +65,13 @@ bool parseNavPose(const std::string& msg, double& x, double& y, double& yaw,
                   double* timestamp = nullptr);
 bool parseBaseVel(const std::string& msg, double& linear, double& angular);
 
+/** 将配置模式映射为协议切换命令和精确确认响应。 */
+bool getNavModeProtocol(const std::string& nav_mode, std::string& command,
+                        std::string& expected_response);
+
+/** 解析精确模式响应，返回 1/2/3；非模式响应返回 -1。 */
+int parseNavModeResponse(const std::string& msg);
+
 // ============================================================
 // POSIX 串口 — 轻量级串口读写（无第三方依赖）
 // ============================================================
@@ -81,7 +89,9 @@ public:
   void close();
   bool isOpen() const { return fd_ >= 0; }
 
-  /** 阻塞读取 (timeout 通过 select 实现) */
+  /** 阻塞读取 (timeout 通过 select 实现)
+   * @return >0=数据长度, 0=超时/可重试中断, -1=设备断联或致命错误
+   */
   int read(uint8_t* buf, size_t max_len, int timeout_ms = 50);
 
   /** 阻塞写入 */
@@ -95,11 +105,14 @@ private:
 // 串口链路 — 后台线程读取 + 帧解析 + 消息回调
 // ============================================================
 using MessageCallback = std::function<void(const std::string&)>;
+using ConnectionCallback = std::function<void(bool)>;
 
 class LepuSerialLink
 {
 public:
-  LepuSerialLink(const std::string& port, int baudrate, MessageCallback on_msg);
+  LepuSerialLink(const std::string& port, int baudrate, MessageCallback on_msg,
+                 ConnectionCallback on_connection = ConnectionCallback(),
+                 double reconnect_interval = 1.0);
   ~LepuSerialLink();
 
   // 不可拷贝（持有线程和文件描述符）
@@ -109,21 +122,38 @@ public:
   bool open();
   void close();
   bool isOpen() const;
-  void sendCommand(const std::string& cmd);
+  bool sendCommand(const std::string& cmd);
+  void requestReconnect();
+
+  int reconnectCount() const { return reconnect_count_.load(); }
+  int readErrorCount() const { return read_error_count_.load(); }
+  int writeErrorCount() const { return write_error_count_.load(); }
 
 private:
   void readLoop();
+  void markDisconnected(const char* reason);
+  bool waitForRetry();
 
   std::string port_;
   int baudrate_;
   MessageCallback on_message_;
+  ConnectionCallback on_connection_;
+  int reconnect_interval_ms_;
 
   PosixSerial serial_;
   FrameParser parser_;
 
   std::mutex write_mutex_;
+  std::mutex wait_mutex_;
+  std::condition_variable wait_cv_;
   std::thread read_thread_;
   std::atomic<bool> running_{false};
+  std::atomic<bool> connected_{false};
+  std::atomic<bool> reconnect_requested_{false};
+  std::atomic<int> reconnect_count_{0};
+  std::atomic<int> read_error_count_{0};
+  std::atomic<int> write_error_count_{0};
+  bool ever_connected_ = false;  // 仅由 read_thread_ 访问
 };
 
 }  // namespace chassis_interface

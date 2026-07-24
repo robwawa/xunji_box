@@ -5,6 +5,6 @@
   </class>
   <class type="chassis_interface::TemplateDriver"
          base_class_type="chassis_interface::ChassisDriver">
-    <description>Template driver for new chassis integration — copy and fill in the blanks</description>
+    <description>可运行的新底盘模板，包含九种里程计模型的中文接入案例</description>
   </class>
 </library>

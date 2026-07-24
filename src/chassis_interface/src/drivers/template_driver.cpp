@@ -1,294 +1,368 @@
-#include <chassis_interface/chassis_driver.h>
+#include <chassis_interface/common_chassis_driver.h>
+
 #include <pluginlib/class_list_macros.h>
-#include <boost/thread/shared_mutex.hpp>
-#include <cmath>
+
+#include <array>
 #include <mutex>
+#include <vector>
 
 namespace chassis_interface
 {
 
 /**
- * TemplateDriver — 新底盘驱动开发模板 (差分驱动 / 串口通信)
+ * 新底盘最小接入模板。
  *
- * 接入步骤:
- *   1. cp template_driver.cpp your_driver.cpp
- *   2. 全局替换 TemplateDriver → YourDriver, "template" → "your_chassis"
- *   3. 实现所有标记 TODO 的代码段
- *   4. 在 chassis_interface_plugin.xml 中注册
- *   5. 在 CMakeLists.txt add_library 中添加 src/drivers/your_driver.cpp
- *   6. 复制 config/template_chassis.yaml → your_chassis.yaml, 修改参数
- *   7. catkin_make && roslaunch
+ * 当前模板使用 VelocityOdometryDriver，并把最后一次控制指令回环成速度反馈，
+ * 因此不依赖真实硬件即可运行。接入新底盘时：
+ *   1. 复制本文件并修改类名；
+ *   2. 根据硬件反馈类型选择对应的里程计父类；
+ *   3. 实现 sendCommandToHardware() 和 receiveStateFromHardware()；
+ *   4. 在 plugin XML、CMakeLists.txt 和 YAML 中注册新驱动。
  *
- * 底盘通信方式参考:
- *   - 串口:  参考 LepuDriver / PosixSerial
- *   - CAN:   使用 SocketCAN (socket, bind, read/write)
- *   - 以太网: 使用 ROS topic 或 TCP socket
- *   - 这里以串口为例
+ * 文件下半部分给出了全部九种里程计父类的中文案例。
  */
-class TemplateDriver : public ChassisDriver
+class TemplateDriver : public VelocityOdometryDriver
 {
-public:
-  TemplateDriver();
-  ~TemplateDriver() override;
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    // TODO：替换为串口、CAN 或 TCP 的控制指令编码与发送。
+    std::lock_guard<std::mutex> lock(feedback_mutex_);
+    last_command_ = cmd;
+    return true;
+  }
 
-  // ---- ChassisDriver 接口 ----
-  bool connect(ros::NodeHandle& nh) override;
-  void disconnect() override;
-  ChassisState readState() override;
-  void writeCommand(const ChassisCommand& cmd) override;
-  void emergencyStop() override;
-  void resetOdom() override;
-  void getDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) override;
-  std::string getDriverName() const override { return "template"; }
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    // TODO：替换为非阻塞硬件读取及协议解析。
+    std::lock_guard<std::mutex> lock(feedback_mutex_);
+    feedback.stamp = ros::Time::now();
+    feedback.linear_vel = last_command_.linear_vel;
+    feedback.angular_vel = last_command_.angular_vel;
+    feedback.is_connected = true;
+    return true;
+  }
 
 private:
-  // ---- 硬件通信 (TODO: 替换为你的通信方式) ----
-  bool openHardware();
-  void closeHardware();
-  bool isHardwareOpen() const;
-  int writeHardware(const uint8_t* data, size_t len);
-  int readHardware(uint8_t* buf, size_t max_len, int timeout_ms);
-
-  // ---- 串口示例 ----
-  std::string port_;
-  int baudrate_;
-  int hw_fd_;  // 文件描述符 (串口/socket/CAN)
-
-  // ---- 协议转换 (TODO: 实现你的底盘协议) ----
-  void sendVelocity(double linear, double angular);
-  void sendStop();
-
-  // 里程计算法 inherit from ChassisDriver::integrateMotion / normalizeAngle
-
-  mutable boost::shared_mutex state_mutex_;
-  double odom_x_ = 0.0, odom_y_ = 0.0, odom_yaw_ = 0.0;
-  double linear_vel_ = 0.0, angular_vel_ = 0.0;
-
-  // ---- 底盘参数 ----
-  double wheel_separation_;     // 两轮间距 (m)
-  double wheel_radius_;         // 轮子半径 (m)
-  int encoder_ticks_per_rev_;   // 编码器每圈脉冲
-  double meters_per_tick_;
-  double odom_linear_scale_ = 1.0;
-  double odom_angular_scale_ = 1.0;
-
-  // ---- 诊断 ----
-  std::atomic<int> msg_count_{0};
-  std::atomic<int> err_count_{0};
-  ros::Time last_data_time_;
+  std::mutex feedback_mutex_;
+  ChassisCommand last_command_;
 };
-
-// ============================================================
-// 构造/析构
-// ============================================================
-TemplateDriver::TemplateDriver()
-  : hw_fd_(-1)
-{
-}
-
-TemplateDriver::~TemplateDriver()
-{
-  disconnect();
-}
-
-// ============================================================
-// 连接底盘
-// ============================================================
-bool TemplateDriver::connect(ros::NodeHandle& nh)
-{
-  // 读取参数 (这些参数在 your_chassis.yaml 中配置)
-  nh.param<std::string>("port", port_, "/dev/ttyUSB0");
-  nh.param<int>("baudrate", baudrate_, 115200);
-  nh.param<double>("wheel_separation", wheel_separation_, 0.30);
-  nh.param<double>("wheel_radius", wheel_radius_, 0.10);
-  nh.param<int>("encoder_ticks_per_rev", encoder_ticks_per_rev_, 4096);
-  nh.param<double>("odom_linear_scale", odom_linear_scale_, 1.0);
-  nh.param<double>("odom_angular_scale", odom_angular_scale_, 1.0);
-
-  meters_per_tick_ = (2.0 * M_PI * wheel_radius_) / std::max(encoder_ticks_per_rev_, 1);
-
-  // 打开硬件
-  if (!openHardware())
-  {
-    ROS_ERROR("[TemplateDriver] Failed to open %s", port_.c_str());
-    return false;
-  }
-
-  ROS_INFO("[TemplateDriver] Connected %s @ %d, sep=%.3f rad=%.3f",
-           port_.c_str(), baudrate_, wheel_separation_, wheel_radius_);
-
-  // TODO: 发送初始化指令 (示例)
-  // writeHardware(...);
-
-  last_data_time_ = ros::Time::now();
-  return true;
-}
-
-void TemplateDriver::disconnect()
-{
-  sendStop();
-  closeHardware();
-}
-
-// ============================================================
-// 读取状态 (必须实现 — 从底盘获取编码器/位姿/速度)
-// ============================================================
-ChassisState TemplateDriver::readState()
-{
-  ChassisState state;
-
-  // TODO: 从底盘读取编码器或速度数据
-  // 示例 — 假设通过串口读取到左右轮编码器值:
-  // int32_t left_enc = 0, right_enc = 0;
-  // if (readEncodersFromHardware(left_enc, right_enc)) { ... }
-  //
-  // 编码器 → 里程计 的差速模型:
-  //   delta_left  = (left_enc  - last_left_enc_)  * meters_per_tick_;
-  //   delta_right = (right_enc - last_right_enc_) * meters_per_tick_;
-  //   delta_center = 0.5 * (delta_left + delta_right);
-  //   delta_yaw    = (delta_right - delta_left) / wheel_separation_;
-  //   integrateMotion(delta_center, delta_yaw, dt);
-
-  {
-    boost::shared_lock<boost::shared_mutex> lock(state_mutex_);
-    state.x = odom_x_;
-    state.y = odom_y_;
-    state.yaw = odom_yaw_;
-    state.linear_vel = linear_vel_;
-    state.angular_vel = angular_vel_;
-  }
-
-  state.is_connected = isHardwareOpen();
-  state.stamp = ros::Time::now();
-
-  if (!state.is_connected)
-  {
-    state.error_code = 1;
-    state.status_msg = "Hardware disconnected";
-  }
-
-  return state;
-}
-
-// ============================================================
-// 下发指令 (必须实现 — 将速度转为底盘协议)
-// ============================================================
-void TemplateDriver::writeCommand(const ChassisCommand& cmd)
-{
-  if (!isHardwareOpen()) return;
-
-  // TODO: 将 cmd.linear_vel / cmd.angular_vel 转为你的底盘协议
-  // 示例 — 差速底盘转换为左右轮速度:
-  //   double left_vel  = cmd.linear_vel - cmd.angular_vel * wheel_separation_ / 2.0;
-  //   double right_vel = cmd.linear_vel + cmd.angular_vel * wheel_separation_ / 2.0;
-  //   sendVelocity(left_vel, right_vel);
-
-  sendVelocity(cmd.linear_vel, cmd.angular_vel);
-}
-
-// ============================================================
-// 紧急停止
-// ============================================================
-void TemplateDriver::emergencyStop()
-{
-  sendStop();
-
-  boost::unique_lock<boost::shared_mutex> lock(state_mutex_);
-  linear_vel_ = 0.0;
-  angular_vel_ = 0.0;
-}
-
-// ============================================================
-// 重置里程计
-// ============================================================
-void TemplateDriver::resetOdom()
-{
-  boost::unique_lock<boost::shared_mutex> lock(state_mutex_);
-  odom_x_ = 0.0;
-  odom_y_ = 0.0;
-  odom_yaw_ = 0.0;
-  linear_vel_ = 0.0;
-  angular_vel_ = 0.0;
-}
-
-// ============================================================
-// 诊断
-// ============================================================
-void TemplateDriver::getDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat)
-{
-  if (!isHardwareOpen())
-  {
-    stat.summary(diagnostic_msgs::DiagnosticStatus::ERROR, "Hardware disconnected");
-  }
-  else
-  {
-    stat.summary(diagnostic_msgs::DiagnosticStatus::OK, "OK");
-  }
-  stat.add("port", port_);
-  stat.add("msg_count", msg_count_.load());
-  stat.add("err_count", err_count_.load());
-}
-
-// ============================================================
-// 里程计算法 (通用 — 可直接复用)
-// ============================================================
-// integrateMotion/normalizeAngle 已在 ChassisDriver 基类中实现，直接调用
-
-// ============================================================
-// 硬件层 — 串口示例 (TODO: 替换为你的通信方式)
-// ============================================================
-bool TemplateDriver::openHardware()
-{
-  // 示例：POSIX 串口
-  // hw_fd_ = ::open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
-  // ... 配置 termios ...
-  // return hw_fd_ >= 0;
-
-  hw_fd_ = 0;  // 桩：表示已连接
-  return true;
-}
-
-void TemplateDriver::closeHardware()
-{
-  if (hw_fd_ >= 0) { /* ::close(hw_fd_); */ hw_fd_ = -1; }
-}
-
-bool TemplateDriver::isHardwareOpen() const
-{
-  return hw_fd_ >= 0;
-}
-
-int TemplateDriver::writeHardware(const uint8_t* data, size_t len)
-{
-  if (hw_fd_ < 0) return -1;
-  // return ::write(hw_fd_, data, len);
-  return static_cast<int>(len);  // 桩
-}
-
-int TemplateDriver::readHardware(uint8_t* buf, size_t max_len, int timeout_ms)
-{
-  if (hw_fd_ < 0) return -1;
-  // select + ::read ...
-  return 0;  // 桩
-}
-
-// ============================================================
-// 协议层 — 速度控制 (TODO: 实现你的底盘协议帧)
-// ============================================================
-void TemplateDriver::sendVelocity(double linear, double angular)
-{
-  // TODO: 构造并发送速度指令帧
-  // 示例 — 乐普协议: app_vel[linear,angular]
-  // 示例 — 某底盘自定义帧: <header> <len> <left_rpm> <right_rpm> <crc>
-}
-
-void TemplateDriver::sendStop()
-{
-  // TODO: 构造并发送停止帧
-  // 大多数底盘: 发送零速度指令即可
-  sendVelocity(0.0, 0.0);
-}
 
 }  // namespace chassis_interface
 
-PLUGINLIB_EXPORT_CLASS(chassis_interface::TemplateDriver, chassis_interface::ChassisDriver)
+PLUGINLIB_EXPORT_CLASS(
+  chassis_interface::TemplateDriver, chassis_interface::ChassisDriver)
+
+/*
+ * ============================================================================
+ * 各类里程计接入案例
+ * ============================================================================
+ *
+ * 以下代码放在 #if 0 中，仅作为可复制的开发模板，不参与当前插件编译和注册。
+ *
+ * 所有案例共同约定：
+ *   - receiveStateFromHardware() 暂时没有新数据时返回 false，不能长时间阻塞；
+ *   - 收到有效数据时填写 feedback.stamp 和 feedback.is_connected；
+ *   - wheel_speeds 单位为 m/s，正方向沿轮子实际滚动方向；
+ *   - steering_angles 单位为 rad，是车体坐标系中的实际滚动方向；
+ *   - 车体坐标系 X 向前、Y 向左，逆时针角度为正；
+ *   - 电机 RPM、减速比、轮径、安装角和编码器零偏应在协议驱动中完成换算。
+ */
+#if 0
+
+namespace chassis_interface
+{
+
+// ============================================================================
+// 案例 1：左右轮累计编码器差速里程
+// 父类：WheelOdometryDriver
+// 必填：left_encoder、right_encoder、stamp
+// YAML：wheel_separation、wheel_radius、encoder_ticks_per_rev、encoder_bits
+// ============================================================================
+class EncoderWheelExampleDriver : public WheelOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    // 将车体 v/w 转换成底盘协议并发送。
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    int64_t left_count = 0;
+    int64_t right_count = 0;
+    if (!protocol_.tryReadEncoder(left_count, right_count)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.left_encoder = left_count;
+    feedback.right_encoder = right_count;
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 2：车体线速度/角速度积分里程
+// 父类：VelocityOdometryDriver
+// 必填：linear_vel、angular_vel、stamp
+// 适用：下位机直接反馈车体 vx 和 wz，但不反馈绝对位姿
+// ============================================================================
+class VelocityExampleDriver : public VelocityOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    if (!protocol_.tryReadBodyVelocity(
+        feedback.linear_vel, feedback.angular_vel)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 3：下位机绝对位姿里程
+// 父类：DirectOdometryDriver
+// 必填：x、y、yaw、stamp
+// 可选：同时填写 linear_vel、angular_vel，并将 velocity_valid 设为 true
+// ============================================================================
+class DirectPoseExampleDriver : public DirectOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    if (!protocol_.tryReadPose(feedback.x, feedback.y, feedback.yaw)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.velocity_valid = false;  // 公共层根据相邻位姿计算速度。
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 4：左右轮线速度差速里程
+// 父类：DifferentialOdometryDriver
+// wheel_speeds 顺序：[左轮, 右轮]
+// steering_angles：必须为空
+// YAML：wheel_separation
+// ============================================================================
+class DifferentialExampleDriver : public DifferentialOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    double left_speed = 0.0;
+    double right_speed = 0.0;
+    if (!protocol_.tryReadWheelSpeed(left_speed, right_speed)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds = {left_speed, right_speed};
+    feedback.steering_angles.clear();
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 5：前后双差速轮组里程
+// 父类：DoubleDifferentialOdometryDriver
+// wheel_speeds 顺序：[前左, 前右, 后左, 后右]
+// steering_angles 顺序：[前轮组舵角, 后轮组舵角]
+// YAML：wheelbase
+// ============================================================================
+class DoubleDifferentialExampleDriver
+  : public DoubleDifferentialOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    std::array<double, 4> speeds{};
+    std::array<double, 2> angles{};
+    if (!protocol_.tryReadDoubleDifferential(speeds, angles)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds.assign(speeds.begin(), speeds.end());
+    feedback.steering_angles.assign(angles.begin(), angles.end());
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 6：单舵轮里程
+// 父类：SingleSteerOdometryDriver
+// wheel_speeds 顺序：[舵轮线速度]
+// steering_angles 顺序：[舵轮实际舵角]
+// YAML：wheelbase、steer_offset_y
+// ============================================================================
+class SingleSteerExampleDriver : public SingleSteerOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    double wheel_speed = 0.0;
+    double steer_angle = 0.0;
+    if (!protocol_.tryReadSingleSteer(wheel_speed, steer_angle)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds = {wheel_speed};
+    feedback.steering_angles = {steer_angle};
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 7：前后双舵轮里程
+// 父类：DoubleSteerOdometryDriver
+// wheel_speeds 顺序：[前舵轮, 后舵轮]
+// steering_angles 顺序：[前舵角, 后舵角]
+// YAML：wheelbase、wheel_distance
+// ============================================================================
+class DoubleSteerExampleDriver : public DoubleSteerOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    std::array<double, 2> speeds{};
+    std::array<double, 2> angles{};
+    if (!protocol_.tryReadDoubleSteer(speeds, angles)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds.assign(speeds.begin(), speeds.end());
+    feedback.steering_angles.assign(angles.begin(), angles.end());
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 8：四舵轮里程
+// 父类：FourSteerOdometryDriver
+// wheel_speeds 和 steering_angles 均按轮 1、2、3、4 排列
+// YAML：wheel_positions_x、wheel_positions_y，各数组必须包含 4 个元素
+// ============================================================================
+class FourSteerExampleDriver : public FourSteerOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    std::array<double, 4> speeds{};
+    std::array<double, 4> angles{};
+    if (!protocol_.tryReadFourSteer(speeds, angles)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds.assign(speeds.begin(), speeds.end());
+    feedback.steering_angles.assign(angles.begin(), angles.end());
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+// ============================================================================
+// 案例 9：1～4 轮任意布局通用运动学里程
+// 父类：GeneralKinematicsOdometryDriver
+// wheel_speeds 和 steering_angles 数量必须等于 num_wheels
+// YAML：num_wheels、wheel_positions_x、wheel_positions_y
+// 注意：通用单轮模型会自动施加车体横向速度 vy=0 的约束
+// ============================================================================
+class GeneralKinematicsExampleDriver
+  : public GeneralKinematicsOdometryDriver
+{
+protected:
+  bool sendCommandToHardware(const ChassisCommand& cmd) override
+  {
+    return protocol_.sendVelocity(cmd.linear_vel, cmd.angular_vel);
+  }
+
+  bool receiveStateFromHardware(HardwareFeedback& feedback) override
+  {
+    std::vector<double> speeds;
+    std::vector<double> angles;
+    if (!protocol_.tryReadWheels(speeds, angles)) {
+      return false;
+    }
+    feedback.stamp = ros::Time::now();
+    feedback.wheel_speeds = std::move(speeds);
+    feedback.steering_angles = std::move(angles);
+    feedback.is_connected = true;
+    return true;
+  }
+
+private:
+  MyProtocol protocol_;
+};
+
+}  // namespace chassis_interface
+
+#endif  // 仅作为接入案例，不参与编译

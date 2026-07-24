@@ -1,0 +1,6 @@
+<launch>
+  <test test-name="kinematic_odometry"
+        pkg="chassis_interface"
+        type="test_kinematic_odometry"
+        time-limit="60.0" />
+</launch>
