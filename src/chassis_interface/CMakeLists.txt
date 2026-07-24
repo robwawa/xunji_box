@@ -63,6 +63,19 @@ target_link_libraries(chassis_bridge_node
   ${Boost_LIBRARIES}
 )
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(lepu_serial_link_test
+    test/lepu_serial_link_test.cpp
+  )
+  if(TARGET lepu_serial_link_test)
+    target_link_libraries(lepu_serial_link_test
+      chassis_interface
+      ${catkin_LIBRARIES}
+      util
+    )
+  endif()
+endif()
+
 # ============================================================
 # Install
 # ============================================================

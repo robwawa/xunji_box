@@ -1,6 +1,7 @@
 #include <chassis_interface/drivers/lepu/lepu_protocol.h>
 #include <ros/console.h>
 #include <regex>
+#include <algorithm>
 #include <cstring>
 #include <cerrno>
 #include <stdexcept>
@@ -125,6 +126,38 @@ bool parseBaseVel(const std::string& msg, double& linear, double& angular)
   }
 }
 
+bool getNavModeProtocol(const std::string& nav_mode, std::string& command,
+                        std::string& expected_response)
+{
+  if (nav_mode == "navi")
+  {
+    command = "model:navi";
+    expected_response = "model:1";
+    return true;
+  }
+  if (nav_mode == "mapping")
+  {
+    command = "model:mapping";
+    expected_response = "model:2";
+    return true;
+  }
+  if (nav_mode == "remap")
+  {
+    command = "model:remap";
+    expected_response = "model:3";
+    return true;
+  }
+  return false;
+}
+
+int parseNavModeResponse(const std::string& msg)
+{
+  if (msg == "model:1") return 1;
+  if (msg == "model:2") return 2;
+  if (msg == "model:3") return 3;
+  return -1;
+}
+
 
 // ============================================================
 // PosixSerial
@@ -196,9 +229,21 @@ int PosixSerial::read(uint8_t* buf, size_t max_len, int timeout_ms)
   tv.tv_sec = timeout_ms / 1000;
   tv.tv_usec = (timeout_ms % 1000) * 1000;
 
-  if (select(fd_ + 1, &set, nullptr, nullptr, &tv) <= 0) return 0;
+  int ready = select(fd_ + 1, &set, nullptr, nullptr, &tv);
+  if (ready == 0) return 0;
+  if (ready < 0)
+  {
+    if (errno == EINTR) return 0;
+    return -1;
+  }
+
   ssize_t n = ::read(fd_, buf, max_len);
-  if (n < 0 && errno == EINTR) return 0;
+  if (n == 0) return -1;  // select 后读到 EOF，USB ACM 已断开
+  if (n < 0)
+  {
+    if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+    return -1;
+  }
   return static_cast<int>(n);
 }
 
@@ -214,6 +259,7 @@ int PosixSerial::write(const uint8_t* data, size_t len)
       if (errno == EINTR) continue;
       return -1;
     }
+    if (n == 0) return -1;
     written += static_cast<size_t>(n);
   }
   return static_cast<int>(written);
@@ -223,8 +269,15 @@ int PosixSerial::write(const uint8_t* data, size_t len)
 // LepuSerialLink
 // ============================================================
 LepuSerialLink::LepuSerialLink(const std::string& port, int baudrate,
-                               MessageCallback on_msg)
-  : port_(port), baudrate_(baudrate), on_message_(std::move(on_msg))
+                               MessageCallback on_msg,
+                               ConnectionCallback on_connection,
+                               double reconnect_interval)
+  : port_(port)
+  , baudrate_(baudrate)
+  , on_message_(std::move(on_msg))
+  , on_connection_(std::move(on_connection))
+  , reconnect_interval_ms_(
+      std::max(50, static_cast<int>(reconnect_interval * 1000.0)))
 {
 }
 
@@ -232,8 +285,8 @@ LepuSerialLink::~LepuSerialLink() { close(); }
 
 bool LepuSerialLink::open()
 {
-  if (!serial_.open(port_, baudrate_)) return false;
-  running_ = true;
+  if (running_.exchange(true)) return true;
+  reconnect_requested_ = true;
   read_thread_ = std::thread(&LepuSerialLink::readLoop, this);
   return true;
 }
@@ -241,44 +294,123 @@ bool LepuSerialLink::open()
 void LepuSerialLink::close()
 {
   running_ = false;
+  wait_cv_.notify_all();
   if (read_thread_.joinable()) read_thread_.join();
-  serial_.close();
+  {
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    connected_ = false;
+    serial_.close();
+  }
 }
 
-bool LepuSerialLink::isOpen() const { return serial_.isOpen(); }
+bool LepuSerialLink::isOpen() const { return connected_.load(); }
 
-void LepuSerialLink::sendCommand(const std::string& cmd)
+bool LepuSerialLink::sendCommand(const std::string& cmd)
 {
-  if (!serial_.isOpen()) return;
+  if (!connected_) return false;
+
   auto frame = buildFrame(cmd);
-  std::lock_guard<std::mutex> lock(write_mutex_);
-  serial_.write(frame.data(), frame.size());
+  bool notify_disconnected = false;
+  {
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    if (!connected_) return false;
+    if (serial_.write(frame.data(), frame.size()) != static_cast<int>(frame.size()))
+    {
+      write_error_count_++;
+      notify_disconnected = connected_.exchange(false);
+      reconnect_requested_ = true;
+    }
+  }
+
+  if (notify_disconnected)
+  {
+    ROS_WARN("[LepuSerialLink] Serial write failed; reconnect requested");
+    if (on_connection_) on_connection_(false);
+    wait_cv_.notify_all();
+    return false;
+  }
+  return true;
+}
+
+void LepuSerialLink::requestReconnect()
+{
+  reconnect_requested_ = true;
+  wait_cv_.notify_all();
+}
+
+void LepuSerialLink::markDisconnected(const char* reason)
+{
+  bool notify_disconnected = false;
+  {
+    std::lock_guard<std::mutex> lock(write_mutex_);
+    serial_.close();
+    notify_disconnected = connected_.exchange(false);
+  }
+
+  if (notify_disconnected)
+  {
+    ROS_WARN("[LepuSerialLink] %s; reconnect requested", reason);
+    if (on_connection_) on_connection_(false);
+  }
+}
+
+bool LepuSerialLink::waitForRetry()
+{
+  std::unique_lock<std::mutex> lock(wait_mutex_);
+  wait_cv_.wait_for(lock, std::chrono::milliseconds(reconnect_interval_ms_),
+                    [this] { return !running_.load(); });
+  return running_.load();
 }
 
 void LepuSerialLink::readLoop()
 {
   while (running_)
   {
-    if (!serial_.isOpen())
+    if (reconnect_requested_.exchange(false))
     {
-      // 自动重连
-      if (serial_.open(port_, baudrate_))
+      markDisconnected("Reconnect explicitly requested");
+    }
+
+    if (!connected_)
+    {
+      bool opened = false;
       {
-        // 重连成功，清空解析器缓冲区
+        std::lock_guard<std::mutex> lock(write_mutex_);
+        if (running_ && serial_.open(port_, baudrate_))
+        {
+          connected_ = true;
+          opened = true;
+        }
+      }
+
+      if (opened)
+      {
         parser_ = FrameParser();
+        if (ever_connected_)
+          reconnect_count_++;
+        else
+          ever_connected_ = true;
+        ROS_INFO("[LepuSerialLink] Connected to %s", port_.c_str());
+        if (on_connection_) on_connection_(true);
+        continue;
       }
-      else
-      {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-      }
+
+      ROS_WARN_THROTTLE(5.0, "[LepuSerialLink] Waiting for serial port %s",
+                        port_.c_str());
+      if (!waitForRetry()) break;
       continue;
     }
 
     uint8_t buf[256];
     int n = serial_.read(buf, sizeof(buf), 50);
-    if (n <= 0)
+    if (n < 0)
     {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      read_error_count_++;
+      markDisconnected("Serial read returned EOF or fatal error");
+      continue;
+    }
+    if (n == 0)
+    {
       continue;
     }
 

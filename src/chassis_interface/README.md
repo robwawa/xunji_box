@@ -155,6 +155,15 @@ roslaunch chassis_interface chassis_bridge.launch chassis:=lepu \
 | `~dt_max` | 0.5 | 最大有效时间间隔 (s) |
 | `~vel_lpf_alpha` | 0.3 | 速度低通滤波系数 (0~1, 越小越平滑) |
 | `~max_vel_change` | 0.5 | 最大速度变化率 (m/s², 防止SLAM跳变) |
+| `~reconnect_interval` | 1.0 | USB断联后通过稳定设备别名重试的间隔 (s) |
+| `~data_timeout` | 1.0 | 无有效里程计数据后强制重连的超时 (s) |
+
+### USB 断联与模式恢复
+
+- 驱动只重开配置的稳定设备路径（默认 `/dev/lepu_chassis`），不会扫描或占用其他 `/dev/ttyACM*` 设备。
+- EOF、致命读写错误或里程数据超时会关闭旧文件描述符，并由后台线程自动重连。
+- 每次连接后先发送零速和心跳，再设置并查询 `nav_mode`。只有收到精确的模式确认（`navi→model:1`、`mapping→model:2`、`remap→model:3`）并取得新里程数据后才恢复 READY 和里程发布。
+- `nav_pose` 在恢复首帧重新建立会话锚点，避免通信模块复位导致累计里程跳变。
 
 ### 生命周期
 

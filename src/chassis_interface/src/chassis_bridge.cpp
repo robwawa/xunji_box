@@ -224,7 +224,16 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
   }
   else if (state.is_connected && lifecycle_ == LifecycleState::ERROR)
   {
-    transitionTo(LifecycleState::RUNNING);
+    transitionTo(enabled_ ? LifecycleState::RUNNING : LifecycleState::READY);
+  }
+
+  // 链路断联或数据陈旧时，不给旧状态刷新时间戳。
+  // 仅发布零速度反馈，里程计相关话题等待有效数据恢复。
+  if (!state.is_connected)
+  {
+    geometry_msgs::Twist feedback;
+    cmd_vel_feedback_pub_.publish(feedback);
+    return;
   }
 
   // 发布里程计

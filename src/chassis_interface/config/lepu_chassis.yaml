@@ -38,5 +38,7 @@ dt_max: 0.5                      # s, 最大有效时间间隔
 vel_lpf_alpha: 0.3               # 速度低通滤波系数 (0~1, 越小越平滑, 0.3=中等滤波)
 max_vel_change: 0.5              # m/s², 单周期最大线速度变化量(变化率限幅)
 max_angular_vel_change: 1.0      # rad/s², 单周期最大角速度变化量(变化率限幅)
+reconnect_interval: 1.0          # s, USB断联后通过稳定设备别名重试的间隔
+data_timeout: 1.0                # s, 无有效里程计数据时强制重连
 
 # 注: 官方协议 core_data(§4) wheel_status(§5) 均不含编码器
