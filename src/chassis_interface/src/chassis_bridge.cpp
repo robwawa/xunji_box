@@ -200,21 +200,6 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
     }
   }
 
-  // 下发指令
-  if (enabled_ && lifecycle_ == LifecycleState::RUNNING)
-  {
-    ChassisCommand cmd;
-    {
-      std::lock_guard<std::mutex> lock(cmd_mutex_);
-      cmd = current_cmd_;
-    }
-    driver_->writeCommand(cmd);
-  }
-  else
-  {
-    driver_->writeCommand(ChassisCommand());  // 零速
-  }
-
   // 读取状态
   ChassisState state = driver_->readState();
 
@@ -227,26 +212,35 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
     transitionTo(enabled_ ? LifecycleState::RUNNING : LifecycleState::READY);
   }
 
-  // 链路断联或数据陈旧时，不给旧状态刷新时间戳。
-  // 仅发布零速度反馈，里程计相关话题等待有效数据恢复。
-  if (!state.is_connected)
+  // 下发指令。链路断开、重连握手或里程计数据超时时，强制发送零速度；
+  // 只有连接和有效里程计均恢复后，才允许恢复控制指令。
+  if (enabled_ && lifecycle_ == LifecycleState::RUNNING && state.is_connected)
   {
-    geometry_msgs::Twist feedback;
-    cmd_vel_feedback_pub_.publish(feedback);
-    return;
+    ChassisCommand cmd;
+    {
+      std::lock_guard<std::mutex> lock(cmd_mutex_);
+      cmd = current_cmd_;
+    }
+    driver_->writeCommand(cmd);
+  }
+  else
+  {
+    driver_->writeCommand(ChassisCommand());
   }
 
-  // 发布里程计
+  // 始终发布里程计。断线期间使用驱动保存的最后有效位姿，并刷新时间戳，
+  // 但不外推位置且强制速度为零，直到收到新的有效里程计数据。
+  const bool odom_frozen = !state.is_connected;
   nav_msgs::Odometry odom;
-  odom.header.stamp = state.stamp;
+  odom.header.stamp = odom_frozen ? ros::Time::now() : state.stamp;
   odom.header.frame_id = odom_frame_;
   odom.child_frame_id = base_frame_;
   odom.pose.pose.position.x = state.x;
   odom.pose.pose.position.y = state.y;
   odom.pose.pose.position.z = 0.0;
   odom.pose.pose.orientation = tf::createQuaternionMsgFromYaw(state.yaw);
-  odom.twist.twist.linear.x = state.linear_vel;
-  odom.twist.twist.angular.z = state.angular_vel;
+  odom.twist.twist.linear.x = odom_frozen ? 0.0 : state.linear_vel;
+  odom.twist.twist.angular.z = odom_frozen ? 0.0 : state.angular_vel;
   // 协方差（通过参数可调，默认值适用于一般编码器里程计）
   odom.pose.covariance[0]  = cov_pose_xx_;      //  X   pos_x
   odom.pose.covariance[7]  = cov_pose_yy_;      //  Y   pos_y
@@ -257,8 +251,8 @@ void ChassisBridge::publishLoop(const ros::TimerEvent& event)
 
   // 速度反馈 — MPC 闭环控制使用
   geometry_msgs::Twist feedback;
-  feedback.linear.x  = state.linear_vel;
-  feedback.angular.z = state.angular_vel;
+  feedback.linear.x  = odom.twist.twist.linear.x;
+  feedback.angular.z = odom.twist.twist.angular.z;
   cmd_vel_feedback_pub_.publish(feedback);
 
   // TF odom→base_link 由 xrobot_driver_odom_fusion 和 xrobot_ukf_localization
