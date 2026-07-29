@@ -551,7 +551,7 @@ void LepuDriver::handleConnectionChanged(bool connected)
   else
   {
     error_count_++;
-    ROS_ERROR("[LepuDriver] Serial disconnected; odometry output suspended");
+    ROS_ERROR("[LepuDriver] Serial disconnected; odometry will be frozen until reconnect");
   }
 }
 
